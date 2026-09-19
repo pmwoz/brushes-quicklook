@@ -5,9 +5,8 @@ extensions for Photoshop `.abr` and Procreate `.brush` and `.brushset` files:
 thumbnails in icon view and a space-bar preview showing every brush tip in the
 file, without opening Photoshop or Procreate.
 
-Status: project bootstrapped, no Swift code yet. See the open issues for the
-build order. The first issue is a spike that proves a Rust static library
-renders inside a sandboxed Quick Look extension.
+Status: architecture proven by a spike, no Swift code committed yet. See the
+open issues for the build order.
 
 ## What the preview shows
 
@@ -65,6 +64,21 @@ Download the DMG from Releases, move the app to Applications and open it once.
 macOS registers the extensions on first launch. If Finder still shows generic
 icons, enable them under System Settings > General > Login Items & Extensions
 > Quick Look.
+
+## Decisions
+
+- **Native Swift + Rust static library in the extension.** Confirmed by a
+  throwaway spike (issue #1). A universal `staticlib` with an `extern "C"`
+  surface links into a sandboxed, hardened-runtime `QLPreviewingController`
+  extension and renders a 441-brush `.abr` in under 300 ms. Peak memory for
+  that file was 577 MB because tips were decoded at full size; the preview
+  crate decodes to the cell size instead.
+- **The host app imports the UTTypes.** Without it, `.abr`, `.brush` and
+  `.brushset` resolve to dynamic UTIs and Quick Look never routes them to the
+  extension. The exact declarations are in issue #1.
+- **Errors surface as text.** When parsing fails, the extension hands the
+  library's message to Quick Look, which shows it above the generic file card.
+  No blank window, no crash.
 
 ## License
 
