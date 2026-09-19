@@ -5,26 +5,17 @@ brush files: Finder thumbnails and the space-bar preview for Photoshop `.abr`
 and Procreate `.brush` and `.brushset`. Read `README.md` first for scope,
 architecture and build steps.
 
-## Work tracking
+## Process
 
-This repository tracks work on GitHub only: Issues, branches, pull requests,
-reviews and CI. There is no Backlog.md here and none should be added. If the
-shared `~/Code` conventions mention Backlog.md or the `bl` wrapper, they do not
-apply to this project.
+Work is tracked in GitHub Issues and pull requests. A pull request is judged
+on the diff, the tests and the description. Everything written down is
+English: code, comments, commits, issues, pull requests and docs.
 
-Everything written down is English: code, comments, commits, issues, pull
-requests and docs.
+## Build and test
 
-## Contributor path
-
-A contributor needs Xcode, Rust and `xcodegen`. `README.md` lists the exact
-commands to build, run the tests and produce a debug build. Nothing in the
-build or the tests reaches a private repository, a token or a secret. If a
-change would require one, it is the wrong change.
-
-Agent skills used by the maintainer (poteto, pstack) are a way of working, not a
-requirement. A pull request is judged on the diff, the tests and the
-description.
+A contributor needs Xcode, a Rust toolchain and `xcodegen`. `README.md` lists
+the commands. Nothing in the build or the tests reaches a private repository,
+a token or a secret. If a change would require one, it is the wrong change.
 
 ## Engine
 
