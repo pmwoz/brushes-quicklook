@@ -1,0 +1,42 @@
+# Working in this repository
+
+Brushes Quick Look is a macOS app that ships two Quick Look extensions for
+brush files: Finder thumbnails and the space-bar preview for Photoshop `.abr`
+and Procreate `.brush` and `.brushset`. Read `README.md` first for scope,
+architecture and build steps.
+
+## Work tracking
+
+This repository tracks work on GitHub only: Issues, branches, pull requests,
+reviews and CI. There is no Backlog.md here and none should be added. If the
+shared `~/Code` conventions mention Backlog.md or the `bl` wrapper, they do not
+apply to this project.
+
+Everything written down is English: code, comments, commits, issues, pull
+requests and docs.
+
+## Contributor path
+
+A contributor needs Xcode, Rust and `xcodegen`. `README.md` lists the exact
+commands to build, run the tests and produce a debug build. Nothing in the
+build or the tests reaches a private repository, a token or a secret. If a
+change would require one, it is the wrong change.
+
+Agent skills used by the maintainer (poteto, pstack) are a way of working, not a
+requirement. A pull request is judged on the diff, the tests and the
+description.
+
+## Engine
+
+Parsing and tip rendering come from the `brushkit` crates, pulled in through
+Cargo. This repository holds only the Swift app, the two extensions and a thin
+C ABI crate that exposes `brushkit` to Swift. Format parsing fixes go to
+`brushkit`, not here.
+
+## Code rules
+
+- Swift 6, strict concurrency, hardened runtime and App Sandbox on every
+  target.
+- The extensions must never crash on a hostile file. Parse errors become a
+  visible error state in the preview and a badge-only thumbnail.
+- No conversion, editing or stroke simulation. This is a viewer.
