@@ -1,0 +1,4 @@
+module BrushkitFFI {
+    header "brushkit_ffi.h"
+    export *
+}

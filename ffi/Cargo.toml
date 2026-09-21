@@ -1,0 +1,20 @@
+[package]
+name = "brushkit-ffi"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+brushkit-preview = { git = "https://github.com/pmwoz/brushkit", tag = "v0.1.0", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = 1
+
+[workspace]

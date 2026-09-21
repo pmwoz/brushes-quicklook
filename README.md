@@ -5,8 +5,8 @@ extensions for Photoshop `.abr` and Procreate `.brush` and `.brushset` files:
 thumbnails in icon view and a space-bar preview showing every brush tip in the
 file, without opening Photoshop or Procreate.
 
-Status: architecture proven by a spike, no Swift code committed yet. See the
-open issues for the build order.
+Status: the scaffold builds and registers the extensions. The preview grid and
+the thumbnails are tracked in issues #3 and #4.
 
 ## What the preview shows
 
@@ -46,17 +46,14 @@ Requires Xcode, a Rust toolchain with the `aarch64-apple-darwin` and
 
 ```
 xcodegen generate
-xcodebuild -scheme BrushesQuickLook -configuration Debug build
+xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesQuickLook -configuration Debug build
 ```
 
 Tests:
 
 ```
 cargo test --manifest-path ffi/Cargo.toml
-xcodebuild -scheme BrushesQuickLook test
 ```
-
-The exact commands are filled in once the scaffold lands.
 
 ## Installing a release
 
