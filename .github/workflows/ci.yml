@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install Intel Rust target
+        run: rustup target add x86_64-apple-darwin
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Test FFI
+        run: cargo test --manifest-path ffi/Cargo.toml
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build Debug
+        run: xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesQuickLook -configuration Debug -derivedDataPath build build
+      - name: Build Release
+        run: xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesQuickLook -configuration Release ONLY_ACTIVE_ARCH=NO -derivedDataPath build build
+      - name: Check Release app
+        run: scripts/check-build.sh build/Build/Products/Release/BrushesQuickLook.app

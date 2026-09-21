@@ -49,6 +49,9 @@ xcodegen generate
 xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesQuickLook -configuration Debug build
 ```
 
+The checks CI runs after a Release build live in `scripts/check-build.sh` and
+take the built app path. CI runs the same steps on GitHub's `macos-26` image.
+
 Tests:
 
 ```
