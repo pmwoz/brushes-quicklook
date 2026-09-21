@@ -1,0 +1,125 @@
+name: BrushesQuickLook
+options:
+  bundleIdPrefix: pl.esdesign.brushesquicklook
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "26.6"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: 6.0
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    # Ad-hoc Debug signing drops the hardened runtime without this.
+    OTHER_CODE_SIGN_FLAGS: --options runtime
+    DEVELOPMENT_TEAM: ""
+    # An ad-hoc signed appex cannot load the Debug-only split dylib.
+    ENABLE_DEBUG_DYLIB: NO
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+aggregateTargets:
+  BrushkitFFI:
+    settings:
+      ENABLE_USER_SCRIPT_SANDBOXING: NO
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+    buildScripts:
+      - name: Build Brushkit FFI
+        script: '"$SRCROOT/ffi/build.sh"'
+        basedOnDependencyAnalysis: false
+targets:
+  BrushesQuickLook:
+    type: application
+    platform: macOS
+    sources: [App]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: pl.esdesign.brushesquicklook
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSPrincipalClass: NSApplication
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: pl.esdesign.brushesquicklook.abr
+            UTTypeDescription: Photoshop Brush Pack
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [abr]
+          - UTTypeIdentifier: pl.esdesign.brushesquicklook.brushset
+            UTTypeDescription: Procreate Brush Set
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [brushset]
+          - UTTypeIdentifier: pl.esdesign.brushesquicklook.brush
+            UTTypeDescription: Procreate Brush
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [brush]
+    entitlements:
+      path: App/App.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.files.user-selected.read-only: true
+    dependencies:
+      - target: BrushesPreview
+        embed: true
+      - target: BrushesThumbnail
+        embed: true
+  BrushesPreview:
+    type: app-extension
+    platform: macOS
+    sources: [Preview, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: pl.esdesign.brushesquicklook.preview
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/ffi/include
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/ffi/target/universal
+        OTHER_LDFLAGS: -lbrushkit_ffi
+    info:
+      path: Preview/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.quicklook.preview
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PreviewViewController
+          NSExtensionAttributes:
+            QLSupportedContentTypes: [pl.esdesign.brushesquicklook.abr, pl.esdesign.brushesquicklook.brushset, pl.esdesign.brushesquicklook.brush]
+            QLSupportsSearchableItems: false
+    entitlements:
+      path: Preview/Preview.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+    dependencies:
+      - target: BrushkitFFI
+  BrushesThumbnail:
+    type: app-extension
+    platform: macOS
+    sources: [Thumbnail, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: pl.esdesign.brushesquicklook.thumbnail
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/ffi/include
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/ffi/target/universal
+        OTHER_LDFLAGS: -lbrushkit_ffi
+    info:
+      path: Thumbnail/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.quicklook.thumbnail
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ThumbnailProvider
+          NSExtensionAttributes:
+            QLSupportedContentTypes: [pl.esdesign.brushesquicklook.abr, pl.esdesign.brushesquicklook.brushset, pl.esdesign.brushesquicklook.brush]
+            QLThumbnailMinimumDimension: 0
+    entitlements:
+      path: Thumbnail/Thumbnail.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+    dependencies:
+      - target: BrushkitFFI
