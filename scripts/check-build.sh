@@ -34,8 +34,9 @@ for bundle in "$app" \
     printf '%s\n' "$observed" | grep -Eq '[(,]runtime[),]' || fail runtime "$observed"
     printf 'ok %s runtime\n' "$name"
 
-    observed=$(codesign -d --entitlements - "$bundle" 2>&1) || fail app-sandbox "$observed"
-    printf '%s\n' "$observed" | grep -Fq 'com.apple.security.app-sandbox' || fail app-sandbox "$observed"
+    observed=$(codesign -d --entitlements :- "$bundle" 2>/dev/null \
+        | plutil -extract 'com\.apple\.security\.app-sandbox' raw -o - - 2>&1) || fail app-sandbox "$observed"
+    [ "$observed" = true ] || fail app-sandbox "$observed"
     printf 'ok %s app-sandbox\n' "$name"
 
     if [ "$bundle" = "$app" ]; then
