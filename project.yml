@@ -130,6 +130,8 @@ targets:
       - path: Tests
       - path: Preview
         excludes: ["*.plist", "*.entitlements"]
+      - path: Thumbnail
+        excludes: ["*.plist", "*.entitlements"]
       - path: Shared
       - path: ffi/tests/corpus/preview_brush/root_brush
         buildPhase: resources

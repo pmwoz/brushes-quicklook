@@ -5,8 +5,14 @@ extensions for Photoshop `.abr` and Procreate `.brush` and `.brushset` files:
 thumbnails in icon view and a space-bar preview showing every brush tip in the
 file, without opening Photoshop or Procreate.
 
-Status: the space-bar preview shows the brush grid. Finder thumbnails are
-tracked in issue #4.
+Status: the space-bar preview shows the brush grid. Finder thumbnails show
+brush tips with a format badge.
+
+## What the thumbnail shows
+
+A 2×2 grid of the first four available tips with a format badge. Fewer than
+four tips or icons smaller than 64 points show a single tip. Files with no
+available tips or a load error show only the card and badge.
 
 ## What the preview shows
 
