@@ -47,7 +47,7 @@ struct PreviewGrid: View {
             .padding(20)
             Divider()
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 16)], spacing: 16) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 16, alignment: .top)], spacing: 16) {
                     ForEach(cells.indices, id: \.self) { index in
                         cells[index]
                     }
@@ -62,11 +62,19 @@ struct PreviewGrid: View {
 }
 
 struct BrushPreviewCell: View {
-    let entry: BrushEntry
+    let name: String
+    let sourceDimensions: BrushSourceDimensions?
+    let unavailableReason: String
     let image: CGImage?
 
     init(entry: BrushEntry) {
-        self.entry = entry
+        name = entry.name
+        sourceDimensions = entry.sourceDimensions
+        if case let .unavailable(reason) = entry.tip {
+            unavailableReason = reason
+        } else {
+            unavailableReason = "Unable to display this tip"
+        }
         image = BrushTipImage.make(from: entry.tip)
     }
 
@@ -90,6 +98,8 @@ struct BrushPreviewCell: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
+                            .lineLimit(4)
+                            .help(unavailableReason)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(12)
@@ -100,10 +110,10 @@ struct BrushPreviewCell: View {
             .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
             .accessibilityHidden(true)
 
-            Text(entry.name)
+            Text(name)
                 .font(.callout.weight(.medium))
                 .lineLimit(2, reservesSpace: true)
-                .help(entry.name)
+                .help(name)
             Text(dimensionsText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -111,18 +121,14 @@ struct BrushPreviewCell: View {
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(entry.name), \(dimensionsText)\(image == nil ? ", Preview unavailable, \(unavailableReason)" : "")")
+        .accessibilityLabel("\(name), \(dimensionsText)\(image == nil ? ", Preview unavailable, \(unavailableReason)" : "")")
     }
 
     private var dimensionsText: String {
-        if let dimensions = entry.sourceDimensions {
+        if let dimensions = sourceDimensions {
             "\(dimensions.width) × \(dimensions.height) px"
         } else {
             "Source size unknown"
         }
-    }
-
-    private var unavailableReason: String {
-        if case let .unavailable(reason) = entry.tip { reason } else { "Unable to display this tip" }
     }
 }

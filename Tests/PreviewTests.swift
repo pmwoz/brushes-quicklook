@@ -63,12 +63,38 @@ final class PreviewTests: XCTestCase {
         XCTAssertEqual(newCompletions.count, 1)
         XCTAssertNil(newCompletions[0])
         XCTAssertEqual(oldCompletions.count, 1)
+        XCTAssertTrue(controller.view.subviews.contains { $0 === controller.preview })
         XCTAssertEqual(controller.preview?.rootView.title, "Current set")
         XCTAssertEqual(controller.preview?.rootView.cells.count, 2)
         XCTAssertNotNil(controller.preview?.rootView.cells[0].image)
         XCTAssertNil(controller.preview?.rootView.cells[1].image)
         _ = controller.beginPreview { _ in }
         XCTAssertNil(controller.preview, "Changing files clears the previous content")
+    }
+
+    @MainActor
+    func testPreparePreviewLoadsAndInstallsHostedGrid() async throws {
+        let file = try copyFixture("root_brush")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let controller = PreviewViewController()
+        let completed = expectation(description: "Quick Look preparation completed")
+        var completions: [Error?] = []
+        controller.preparePreviewOfFile(at: file) { error in
+            completions.append(error)
+            completed.fulfill()
+        }
+        let result = await XCTWaiter.fulfillment(of: [completed], timeout: 5)
+        XCTAssertEqual(result, .completed)
+        XCTAssertEqual(completions.count, 1)
+        XCTAssertNil(completions.first ?? nil)
+        let hosted = try XCTUnwrap(controller.preview)
+        XCTAssertTrue(controller.view.subviews.contains { $0 === hosted })
+        XCTAssertEqual(hosted.rootView.title, file.lastPathComponent)
+        XCTAssertEqual(hosted.rootView.cells.count, 1)
+        let cell = try XCTUnwrap(hosted.rootView.cells.first)
+        XCTAssertEqual(cell.name, "A")
+        XCTAssertEqual(cell.sourceDimensions, BrushSourceDimensions(width: 16, height: 8))
+        XCTAssertNotNil(cell.image)
     }
 
     @MainActor
@@ -83,10 +109,15 @@ final class PreviewTests: XCTestCase {
         XCTAssertNil(controller.preview)
     }
 
-    private func loadFixture(_ name: String, maxCell: Int = 8) throws -> BrushPreviewSet {
+    private func copyFixture(_ name: String) throws -> URL {
         let source = try XCTUnwrap(Bundle(for: Self.self).url(forResource: name, withExtension: nil))
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("brush")
         try FileManager.default.copyItem(at: source, to: file)
+        return file
+    }
+
+    private func loadFixture(_ name: String, maxCell: Int = 8) throws -> BrushPreviewSet {
+        let file = try copyFixture(name)
         defer { try? FileManager.default.removeItem(at: file) }
         return try BrushPreviewSet.load(file, maxCell: maxCell, timeout: 10)
     }
