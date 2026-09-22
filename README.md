@@ -55,6 +55,8 @@ take the built app path. CI runs the same steps on GitHub's `macos-26` image.
 Tests:
 
 `ffi/tests/corpus` mirrors brushkit's fuzz seed corpus and is replayed by `cargo test`.
+`scripts/preview-hostile.sh` previews a folder of corrupt files through Finder's
+Quick Look and reports which ones the extension handled and whether it crashed.
 
 ```
 cargo test --manifest-path ffi/Cargo.toml
