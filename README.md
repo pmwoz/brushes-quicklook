@@ -47,11 +47,18 @@ Requires Xcode, a Rust toolchain with the `aarch64-apple-darwin` and
 
 ```
 xcodegen generate
-xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesQuickLook -configuration Debug build
+xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesQuickLook -configuration Debug -derivedDataPath build.noindex build
 ```
 
 The checks CI runs after a Release build live in `scripts/check-build.sh` and
 take the built app path. CI runs the same steps on GitHub's `macos-26` image.
+
+Run `scripts/install.sh` to build and check Release, replace
+`/Applications/BrushesQuickLook.app`, and register the app and both extensions.
+It first unregisters every other copy of the app that LaunchServices knows,
+including the one `xcodebuild` registers for its own build product, so System
+Settings lists the app once. Build products live in `build.noindex`, which
+Spotlight skips, so an unregistered build is not registered again by indexing.
 
 Tests:
 
@@ -61,7 +68,7 @@ Quick Look and reports which ones the extension handled and whether it crashed.
 
 ```
 cargo test --manifest-path ffi/Cargo.toml
-xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesPreviewTests test
+xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesPreviewTests -derivedDataPath build.noindex test
 ```
 
 ## Installing a release
