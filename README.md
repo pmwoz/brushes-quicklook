@@ -11,7 +11,7 @@ brush tips with a format badge.
 ## What the thumbnail shows
 
 A 2×2 grid of the first four available tips with a format badge. Fewer than
-four tips or icons smaller than 64 points show a single tip. Files with no
+four tips or icons smaller than 64 points on either side show a single tip. Files with no
 available tips or a load error show only the card and badge.
 
 ## What the preview shows

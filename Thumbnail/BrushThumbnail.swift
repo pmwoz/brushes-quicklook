@@ -13,7 +13,7 @@ struct BrushThumbnail {
     init(badge: String, tips: [BrushTip], size: CGSize) {
         self.badge = badge
         let images = Array(tips.lazy.compactMap { BrushTipImage.make(from: $0) }.prefix(4))
-        if images.count == 4, max(size.width, size.height) >= 64 {
+        if images.count == 4, min(size.width, size.height) >= 64 {
             layout = .grid(images)
         } else if let first = images.first {
             layout = .single(first)
@@ -25,7 +25,7 @@ struct BrushThumbnail {
     static func load(_ url: URL, maximumSize: CGSize, scale: CGFloat) -> BrushThumbnail {
         let pixels = (max(maximumSize.width, maximumSize.height) * scale).rounded(.up)
         // Bound decoding for every entry, including tips that will not be drawn.
-        let maxCell = Int(min(max(pixels, 1), 512))
+        let maxCell = Int(min(max(pixels, 1), 256))
         let set = try? BrushPreviewSet.load(url, maxCell: maxCell, timeout: 5)
         return BrushThumbnail(
             badge: url.pathExtension.uppercased(),
@@ -92,6 +92,7 @@ struct BrushThumbnail {
         context.setFillColor(CGColor(srgbRed: 0.2, green: 0.35, blue: 0.9, alpha: 1))
         context.addPath(CGPath(roundedRect: pill, cornerWidth: badgeHeight / 2, cornerHeight: badgeHeight / 2, transform: nil))
         context.fillPath()
+        context.textMatrix = .identity
         context.textPosition = CGPoint(
             x: pill.midX - bounds.width / 2 - bounds.minX,
             y: pill.midY - bounds.height / 2 - bounds.minY

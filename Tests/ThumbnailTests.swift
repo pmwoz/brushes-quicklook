@@ -30,11 +30,11 @@ final class ThumbnailTests: XCTestCase {
     func testGridUsesFirstFourUsableTipsInOrderAt64Points() throws {
         let tips = [unavailable, tip(1), tip(2), unavailable,
                     .available(width: 0, height: 1, pixels: Data()), tip(3), tip(4), tip(5)]
-        for size in [CGSize(width: 64, height: 32), CGSize(width: 32, height: 64)] {
-            let thumbnail = BrushThumbnail(badge: "BRUSHSET", tips: tips, size: size)
-            guard case let .grid(images) = thumbnail.layout else { return XCTFail("Expected a grid at 64 points on the longer side") }
-            XCTAssertEqual(try images.map(pixels), [Data([1]), Data([2]), Data([3]), Data([4])])
-        }
+        let thumbnail = BrushThumbnail(badge: "BRUSHSET", tips: tips, size: CGSize(width: 64, height: 64))
+        guard case let .grid(images) = thumbnail.layout else { return XCTFail("Expected a grid at 64 points") }
+        XCTAssertEqual(try images.map(pixels), [Data([1]), Data([2]), Data([3]), Data([4])])
+        let narrow = BrushThumbnail(badge: "BRUSHSET", tips: tips, size: CGSize(width: 128, height: 32))
+        guard case .single = narrow.layout else { return XCTFail("The drawn square follows the shorter side") }
     }
 
     func testLoadRootBrushShowsSingleTip() throws {
