@@ -2,6 +2,7 @@ import Cocoa
 import Quartz
 
 final class PreviewViewController: NSViewController, @preconcurrency QLPreviewingController {
+    private static let previewTimeout: TimeInterval = 10
     private let label = NSTextField(labelWithString: "")
 
     override func loadView() {
@@ -18,17 +19,27 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
     }
 
     func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping (Error?) -> Void) {
-        do {
-            let set = try BrushPreviewSet.load(url, maxCell: 160)
-            label.stringValue = "\(set.name ?? url.lastPathComponent) · \(set.entries.count) brushes"
-            handler(nil)
-        } catch {
-            // Quick Look shows a message only for an NSError carrying NSLocalizedDescriptionKey.
-            handler(NSError(
-                domain: Bundle.main.bundleIdentifier ?? "BrushesPreview",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]
-            ))
+        Task {
+            let timeout = Self.previewTimeout
+            let result: Result<BrushPreviewSet, any Error> = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(returning: Result {
+                        try BrushPreviewSet.load(url, maxCell: 160, timeout: timeout)
+                    })
+                }
+            }
+            switch result {
+            case .success(let set):
+                label.stringValue = "\(set.name ?? url.lastPathComponent) · \(set.entries.count) brushes"
+                handler(nil)
+            case .failure(let error):
+                // Quick Look shows a message only for an NSError carrying NSLocalizedDescriptionKey.
+                handler(NSError(
+                    domain: Bundle.main.bundleIdentifier ?? "BrushesPreview",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]
+                ))
+            }
         }
     }
 }

@@ -1,6 +1,6 @@
 use brushkit_preview::{
-    GrayscaleBitmap, PreviewOptions, TipPreview, UnavailableReason, preview_abr, preview_brush,
-    preview_brushset,
+    GrayscaleBitmap, PreviewEntry, PreviewOptions, TipPreview, UnavailableReason, preview_abr,
+    preview_brush, preview_brushset,
 };
 use std::ffi::{CString, c_char, c_uint};
 use std::panic::catch_unwind;
@@ -45,6 +45,31 @@ fn reason_text(reason: UnavailableReason) -> String {
     }
 }
 
+fn convert_entry(entry: PreviewEntry) -> Entry {
+    let (tip, reason) = match entry.tip {
+        TipPreview::Available(bitmap)
+            if bitmap.data.len() == bitmap.width as usize * bitmap.height as usize =>
+        {
+            (Some(bitmap), None)
+        }
+        TipPreview::Available(bitmap) => (
+            None,
+            Some(c_string(format!(
+                "malformed tip bitmap: {} bytes for {}x{} px",
+                bitmap.data.len(),
+                bitmap.width,
+                bitmap.height
+            ))),
+        ),
+        TipPreview::Unavailable(reason) => (None, Some(c_string(reason_text(reason)))),
+    };
+    Entry {
+        name: c_string(entry.name),
+        tip,
+        reason,
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bqk_preview(
     bytes: *const u8,
@@ -73,21 +98,7 @@ pub unsafe extern "C" fn bqk_preview(
             unsafe { std::slice::from_raw_parts(bytes, len) }
         };
         let set = preview(bytes, PreviewOptions { max_cell }).map_err(|e| e.to_string())?;
-        let entries = set
-            .entries
-            .into_iter()
-            .map(|entry| {
-                let (tip, reason) = match entry.tip {
-                    TipPreview::Available(bitmap) => (Some(bitmap), None),
-                    TipPreview::Unavailable(reason) => (None, Some(c_string(reason_text(reason)))),
-                };
-                Entry {
-                    name: c_string(entry.name),
-                    tip,
-                    reason,
-                }
-            })
-            .collect();
+        let entries = set.entries.into_iter().map(convert_entry).collect();
         Ok(Box::new(PreviewSet {
             name: set.set_name.map(c_string),
             entries,
@@ -155,6 +166,88 @@ pub unsafe extern "C" fn bqk_string_free(s: *mut c_char) {
 mod tests {
     use super::*;
     use std::ffi::CStr;
+
+    fn assert_set_or_error(bytes: &[u8], format: c_uint) {
+        let mut error = ptr::null_mut();
+        unsafe {
+            let set = bqk_preview(bytes.as_ptr(), bytes.len(), format, 160, &mut error);
+            if set.is_null() {
+                assert!(!error.is_null());
+                let message = CStr::from_ptr(error).to_string_lossy().into_owned();
+                bqk_string_free(error);
+                assert!(!message.is_empty());
+                assert!(!message.starts_with("brush parser panicked"), "{message}");
+            } else {
+                bqk_preview_set_free(set);
+                assert!(error.is_null());
+            }
+        }
+    }
+
+    #[test]
+    fn empty_input_returns_errors_for_every_format() {
+        for format in [BQK_FORMAT_ABR, BQK_FORMAT_BRUSH, BQK_FORMAT_BRUSHSET] {
+            let mut error = ptr::null_mut();
+            unsafe {
+                let set = bqk_preview(ptr::null(), 0, format, 160, &mut error);
+                assert!(set.is_null());
+                assert!(!error.is_null());
+                assert!(!CStr::from_ptr(error).to_bytes().is_empty());
+                bqk_string_free(error);
+            }
+        }
+    }
+
+    #[test]
+    fn truncation_sweep() {
+        for (path, format) in [
+            ("preview_abr/wellformed_v6_patt", BQK_FORMAT_ABR),
+            ("preview_brush/root_brush", BQK_FORMAT_BRUSH),
+            ("preview_brushset/ordered_set", BQK_FORMAT_BRUSHSET),
+        ] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/corpus")
+                .join(path);
+            let bytes = std::fs::read(path).unwrap();
+            for len in 0..=bytes.len() {
+                assert_set_or_error(&bytes[..len], format);
+            }
+        }
+    }
+
+    #[test]
+    fn corpus_replay() {
+        for (target, format) in [
+            ("preview_abr", BQK_FORMAT_ABR),
+            ("preview_brush", BQK_FORMAT_BRUSH),
+            ("preview_brushset", BQK_FORMAT_BRUSHSET),
+        ] {
+            let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/corpus")
+                .join(target);
+            for file in std::fs::read_dir(directory).unwrap() {
+                let path = file.unwrap().path();
+                if path.is_file() {
+                    assert_set_or_error(&std::fs::read(path).unwrap(), format);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_bitmap_is_unavailable() {
+        let entry = convert_entry(PreviewEntry {
+            index: 0,
+            name: "Malformed tip".to_owned(),
+            tip: TipPreview::Available(GrayscaleBitmap {
+                width: 2,
+                height: 2,
+                data: vec![0; 3],
+            }),
+        });
+        assert!(entry.tip.is_none());
+        assert!(entry.reason.unwrap().to_str().unwrap().contains("3 bytes"));
+    }
 
     #[test]
     fn minimal_abr_matches_preview_count() {

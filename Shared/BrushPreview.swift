@@ -1,5 +1,6 @@
 import Foundation
 import BrushkitFFI
+import os
 
 enum BrushFormat: Sendable {
     case abr, brush, brushset
@@ -43,11 +44,38 @@ struct BrushPreviewError: LocalizedError, Sendable {
 }
 
 extension BrushPreviewSet {
-    static func load(_ url: URL, maxCell: Int) throws -> BrushPreviewSet {
+    /// Files above this many bytes are refused before any byte reaches the parser.
+    static let maxFileSize = 512 << 20
+
+    /// Reads and parses `url` on a background queue. Throws when the file is not a brush
+    /// file, is above `maxFileSize`, cannot be read, fails to parse, or takes longer than `timeout`.
+    static func load(_ url: URL, maxCell: Int, timeout: TimeInterval) throws -> BrushPreviewSet {
         guard let format = BrushFormat(url: url) else {
             throw BrushPreviewError(message: "Unrecognised brush file extension: \(url.pathExtension)")
         }
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        if let fileSize, fileSize > maxFileSize {
+            let size = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .binary)
+            let limit = ByteCountFormatter.string(fromByteCount: Int64(maxFileSize), countStyle: .binary)
+            throw BrushPreviewError(message: "This file is \(size). Files above \(limit) are not previewed.")
+        }
+
+        let result = OSAllocatedUnfairLock<Result<BrushPreviewSet, any Error>?>(initialState: nil)
+        let semaphore = DispatchSemaphore(value: 0)
+        let deadline = DispatchTime.now() + timeout
+        DispatchQueue.global(qos: .userInitiated).async {
+            let parsed = Result { try read(url, format: format, maxCell: maxCell) }
+            result.withLock { $0 = parsed }
+            semaphore.signal()
+        }
+        guard semaphore.wait(timeout: deadline) == .success else {
+            throw BrushPreviewError(message: "Previewing took longer than \(timeout.formatted()) seconds.")
+        }
+        return try result.withLock { $0! }.get()
+    }
+
+    private static func read(_ url: URL, format: BrushFormat, maxCell: Int) throws -> BrushPreviewSet {
+        let data = try Data(contentsOf: url)
         var error: UnsafeMutablePointer<CChar>?
         let set = data.withUnsafeBytes { bytes in
             bqk_preview(bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count, format.cValue, UInt32(maxCell), &error)
