@@ -19,6 +19,8 @@ typedef struct bqk_entry {
     uint32_t height;
     const uint8_t *pixels;          /* width * height gray bytes, 255 = full ink; NULL when unavailable */
     const char *unavailable_reason; /* NULL when available */
+    uint32_t source_width;          /* Original raster size; both 0 when unknown. */
+    uint32_t source_height;
 } bqk_entry;
 
 /* Parses len bytes as format. Tips are downsampled so the larger side is at most max_cell.

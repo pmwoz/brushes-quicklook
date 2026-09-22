@@ -1,6 +1,6 @@
 use brushkit_preview::{
-    GrayscaleBitmap, PreviewEntry, PreviewOptions, TipPreview, UnavailableReason, preview_abr,
-    preview_brush, preview_brushset,
+    GrayscaleBitmap, PreviewEntry, PreviewOptions, SourceDimensions, TipPreview, UnavailableReason,
+    preview_abr, preview_brush, preview_brushset,
 };
 use std::ffi::{CString, c_char, c_uint};
 use std::panic::catch_unwind;
@@ -19,6 +19,7 @@ struct Entry {
     name: CString,
     tip: Option<GrayscaleBitmap>,
     reason: Option<CString>,
+    source_dimensions: Option<SourceDimensions>,
 }
 
 #[repr(C)]
@@ -28,6 +29,8 @@ pub struct CEntry {
     height: u32,
     pixels: *const u8,
     unavailable_reason: *const c_char,
+    source_width: u32,
+    source_height: u32,
 }
 
 fn c_string(value: String) -> CString {
@@ -65,6 +68,7 @@ fn convert_entry(entry: PreviewEntry) -> Entry {
     };
     Entry {
         name: c_string(entry.name),
+        source_dimensions: entry.source_dimensions,
         tip,
         reason,
     }
@@ -138,6 +142,8 @@ pub unsafe extern "C" fn bqk_preview_set_entry(set: *const PreviewSet, index: us
     });
     CEntry {
         name: entry.name.as_ptr(),
+        source_width: entry.source_dimensions.map_or(0, SourceDimensions::width),
+        source_height: entry.source_dimensions.map_or(0, SourceDimensions::height),
         width,
         height,
         pixels,
@@ -239,12 +245,14 @@ mod tests {
         let entry = convert_entry(PreviewEntry {
             index: 0,
             name: "Malformed tip".to_owned(),
+            source_dimensions: SourceDimensions::new(800, 600),
             tip: TipPreview::Available(GrayscaleBitmap {
                 width: 2,
                 height: 2,
                 data: vec![0; 3],
             }),
         });
+        assert_eq!(entry.source_dimensions, SourceDimensions::new(800, 600));
         assert!(entry.tip.is_none());
         assert!(entry.reason.unwrap().to_str().unwrap().contains("3 bytes"));
     }
@@ -261,7 +269,17 @@ mod tests {
             assert_eq!(bqk_preview_set_count(set), expected.entries.len());
             assert!(bqk_preview_set_name(set).is_null());
             for index in 0..bqk_preview_set_count(set) {
-                assert!(!bqk_preview_set_entry(set, index).name.is_null());
+                let entry = bqk_preview_set_entry(set, index);
+                assert!(!entry.name.is_null());
+                let source = expected.entries[index].source_dimensions;
+                assert_eq!(
+                    entry.source_width,
+                    source.map_or(0, SourceDimensions::width)
+                );
+                assert_eq!(
+                    entry.source_height,
+                    source.map_or(0, SourceDimensions::height)
+                );
             }
             bqk_preview_set_free(set);
         }

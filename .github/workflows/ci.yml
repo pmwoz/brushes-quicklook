@@ -29,6 +29,8 @@ jobs:
         run: xcodegen generate
       - name: Build Debug
         run: xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesQuickLook -configuration Debug -derivedDataPath build build
+      - name: Test preview
+        run: xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesPreviewTests -configuration Debug -derivedDataPath build test
       - name: Build Release
         run: xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesQuickLook -configuration Release ONLY_ACTIVE_ARCH=NO -derivedDataPath build build
       - name: Check Release app

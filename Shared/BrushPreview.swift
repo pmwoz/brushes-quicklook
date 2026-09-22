@@ -31,10 +31,23 @@ struct BrushPreviewSet: Sendable {
 struct BrushEntry: Sendable {
     let name: String
     let tip: BrushTip
+    let sourceDimensions: BrushSourceDimensions?
+}
+
+struct BrushSourceDimensions: Sendable, Equatable {
+    let width: UInt32
+    let height: UInt32
+
+    init?(width: UInt32, height: UInt32) {
+        guard width > 0, height > 0 else { return nil }
+        self.width = width
+        self.height = height
+    }
 }
 
 enum BrushTip: Sendable {
-    case available(width: Int, height: Int, pixels: [UInt8])
+    /// `pixels` holds `width * height` coverage bytes, one per pixel, 255 = full ink.
+    case available(width: Int, height: Int, pixels: Data)
     case unavailable(reason: String)
 }
 
@@ -89,20 +102,31 @@ extension BrushPreviewSet {
         let name = bqk_preview_set_name(set).map { String(cString: $0) }
         let entries = (0..<bqk_preview_set_count(set)).map { index in
             let entry = bqk_preview_set_entry(set, index)
-            let tip: BrushTip
-            if let pixels = entry.pixels {
-                let width = Int(entry.width)
-                let height = Int(entry.height)
-                tip = .available(
-                    width: width,
-                    height: height,
-                    pixels: Array(UnsafeBufferPointer(start: pixels, count: width * height))
-                )
-            } else {
-                tip = .unavailable(reason: entry.unavailable_reason.map { String(cString: $0) } ?? "Preview unavailable")
-            }
-            return BrushEntry(name: String(cString: entry.name), tip: tip)
+            return BrushEntry(copying: entry)
         }
         return BrushPreviewSet(name: name, entries: entries)
+    }
+}
+
+extension BrushEntry {
+    init(copying entry: bqk_entry) {
+        let tip: BrushTip
+        if let pixels = entry.pixels {
+            let width = Int(entry.width)
+            let height = Int(entry.height)
+            tip = .available(
+                width: width,
+                height: height,
+                pixels: Data(bytes: pixels, count: width * height)
+            )
+        } else {
+            tip = .unavailable(reason: entry.unavailable_reason.map { String(cString: $0) } ?? "Preview unavailable")
+        }
+
+        self.init(
+            name: String(cString: entry.name),
+            tip: tip,
+            sourceDimensions: BrushSourceDimensions(width: entry.source_width, height: entry.source_height)
+        )
     }
 }

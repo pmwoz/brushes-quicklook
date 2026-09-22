@@ -5,14 +5,15 @@ extensions for Photoshop `.abr` and Procreate `.brush` and `.brushset` files:
 thumbnails in icon view and a space-bar preview showing every brush tip in the
 file, without opening Photoshop or Procreate.
 
-Status: the scaffold builds and registers the extensions. The preview grid and
-the thumbnails are tracked in issues #3 and #4.
+Status: the space-bar preview shows the brush grid. Finder thumbnails are
+tracked in issue #4.
 
 ## What the preview shows
 
 A grid of brush tip shapes.
 
-- Name, tip bitmap and pixel dimensions of every brush.
+- Name, tip bitmap and original raster dimensions when known. Computed tips
+  and unreadable raster headers show an unknown source size.
 - Brushes in file order with a total count, including brushes that have no
   usable preview.
 - An explicit "preview unavailable" cell with the reason, never a silently
@@ -60,6 +61,7 @@ Quick Look and reports which ones the extension handled and whether it crashed.
 
 ```
 cargo test --manifest-path ffi/Cargo.toml
+xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesPreviewTests test
 ```
 
 ## Installing a release
