@@ -54,6 +54,10 @@ take the built app path. CI runs the same steps on GitHub's `macos-26` image.
 
 Tests:
 
+`ffi/tests/corpus` mirrors brushkit's fuzz seed corpus and is replayed by `cargo test`.
+`scripts/preview-hostile.sh` previews a folder of corrupt files through Finder's
+Quick Look and reports which ones the extension handled and whether it crashed.
+
 ```
 cargo test --manifest-path ffi/Cargo.toml
 ```
@@ -79,6 +83,10 @@ icons, enable them under System Settings > General > Login Items & Extensions
 - **Errors surface as text.** When parsing fails, the extension hands the
   library's message to Quick Look, which shows it above the generic file card.
   No blank window, no crash.
+- **Previews are limited to 512 MB and 10 seconds.** Files above the size
+  ceiling are refused before parsing. Reading into memory instead of mapping
+  removes the SIGBUS path when a file shrinks while open. Timed-out work
+  finishes in the background and its result is discarded.
 
 ## License
 
