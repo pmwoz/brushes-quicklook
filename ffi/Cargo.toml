@@ -9,7 +9,7 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-brushkit-preview = { git = "https://github.com/pmwoz/brushkit", rev = "70248484ab647a9b919ff9986f3f97cd33dfc6ee", default-features = false }
+brushkit-preview = { git = "https://github.com/pmwoz/brushkit", tag = "v0.2.0", default-features = false }
 
 [profile.release]
 opt-level = 3
