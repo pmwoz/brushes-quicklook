@@ -123,3 +123,33 @@ targets:
         com.apple.security.app-sandbox: true
     dependencies:
       - target: BrushkitFFI
+  BrushesPreviewTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+      - path: Preview
+        excludes: ["*.plist", "*.entitlements"]
+      - path: Shared
+      - path: ffi/tests/corpus/preview_brush/root_brush
+        buildPhase: resources
+      - path: ffi/tests/corpus/preview_brush/missing_shape
+        buildPhase: resources
+      - path: ffi/tests/corpus/preview_brush/oversized_png
+        buildPhase: resources
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: pl.esdesign.brushesquicklook.preview.tests
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/ffi/include
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/ffi/target/universal
+        OTHER_LDFLAGS: -lbrushkit_ffi
+    dependencies:
+      - target: BrushkitFFI
+schemes:
+  BrushesPreviewTests:
+    build:
+      targets:
+        BrushesPreviewTests: all
+    test:
+      targets: [BrushesPreviewTests]
