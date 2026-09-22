@@ -46,7 +46,8 @@ struct BrushSourceDimensions: Sendable, Equatable {
 }
 
 enum BrushTip: Sendable {
-    case available(width: Int, height: Int, pixels: [UInt8])
+    /// `pixels` holds `width * height` coverage bytes, one per pixel, 255 = full ink.
+    case available(width: Int, height: Int, pixels: Data)
     case unavailable(reason: String)
 }
 
@@ -116,7 +117,7 @@ extension BrushEntry {
             tip = .available(
                 width: width,
                 height: height,
-                pixels: Array(UnsafeBufferPointer(start: pixels, count: width * height))
+                pixels: Data(bytes: pixels, count: width * height)
             )
         } else {
             tip = .unavailable(reason: entry.unavailable_reason.map { String(cString: $0) } ?? "Preview unavailable")

@@ -14,7 +14,7 @@ final class PreviewTests: XCTestCase {
         }
         XCTAssertEqual(width, 8)
         XCTAssertEqual(height, 4)
-        XCTAssertEqual(pixels, [UInt8](repeating: 200, count: 32))
+        XCTAssertEqual(pixels, Data(repeating: 200, count: 32))
     }
 
     func testUnavailableBridgeEntriesKeepOnlyKnownDimensions() throws {
@@ -34,13 +34,40 @@ final class PreviewTests: XCTestCase {
         }
     }
 
-    func testCoverageBecomesOwnedAlphaWithFullInkAt255() throws {
-        let image = try XCTUnwrap(BrushTipImage.make(from: .available(width: 3, height: 1, pixels: [0, 128, 255])))
-        let context = try XCTUnwrap(CGContext(data: nil, width: 3, height: 1, bitsPerComponent: 8, bytesPerRow: 12, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-        context.draw(image, in: CGRect(x: 0, y: 0, width: 3, height: 1))
-        let pixels = try XCTUnwrap(context.data).bindMemory(to: UInt8.self, capacity: 12)
-        XCTAssertEqual([pixels[3], pixels[7], pixels[11]], [0, 128, 255])
-        XCTAssertEqual([pixels[8], pixels[9], pixels[10]], [0, 0, 0])
+    func testCoverageBecomesOwnedMaskTintedByFillWithFullInkAt255() throws {
+        var source = Data([0, 128, 255])
+        let image = try XCTUnwrap(BrushTipImage.make(from: .available(width: 3, height: 1, pixels: source)))
+
+        XCTAssertTrue(image.isMask)
+        XCTAssertEqual(image.bitsPerComponent, 8)
+        XCTAssertEqual(image.bitsPerPixel, 8)
+        XCTAssertEqual(image.bytesPerRow, 3)
+        XCTAssertEqual(try XCTUnwrap(image.dataProvider?.data) as Data, Data([0, 128, 255]))
+
+        let black = try draw(image, fill: CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        XCTAssertEqual([black[3], black[7], black[11]], [0, 128, 255])
+        XCTAssertEqual(Array(black[8..<11]), [0, 0, 0])
+        let white = try draw(image, fill: CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        XCTAssertEqual([white[3], white[7], white[11]], [0, 128, 255])
+        XCTAssertEqual(Array(white[8..<11]), [255, 255, 255])
+        XCTAssertEqual(Array(white[4..<7]), [128, 128, 128], "Premultiplied white at half coverage")
+
+        source[0] = 255
+        source = Data()
+        XCTAssertEqual(source.count, 0)
+        let redrawn = try draw(image, fill: CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        XCTAssertEqual([redrawn[3], redrawn[7], redrawn[11]], [0, 128, 255])
+        let scoped = try XCTUnwrap(BrushTipImage.make(from: .available(width: 1, height: 1, pixels: Data([255]))))
+        XCTAssertEqual(try draw(scoped, fill: CGColor(red: 0, green: 0, blue: 0, alpha: 1)), [0, 0, 0, 255])
+    }
+
+    private func draw(_ image: CGImage, fill: CGColor) throws -> [UInt8] {
+        let width = image.width
+        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: 1, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(fill)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: 1))
+        let bytes = try XCTUnwrap(context.data).bindMemory(to: UInt8.self, capacity: width * 4)
+        return Array(UnsafeBufferPointer(start: bytes, count: width * 4))
     }
 
     @MainActor
@@ -54,7 +81,7 @@ final class PreviewTests: XCTestCase {
         XCTAssertEqual((oldCompletions[0] as NSError?)?.code, NSUserCancelledError)
         XCTAssertNil(controller.preview)
         let set = BrushPreviewSet(name: "Current set", entries: [
-            BrushEntry(name: "Same name", tip: .available(width: 1, height: 1, pixels: [255]), sourceDimensions: nil),
+            BrushEntry(name: "Same name", tip: .available(width: 1, height: 1, pixels: Data([255])), sourceDimensions: nil),
             BrushEntry(name: "Same name", tip: .unavailable(reason: "no Shape.png"), sourceDimensions: nil),
         ])
         controller.finishPreview(current, result: .success(set), fileName: "current.brushset")
