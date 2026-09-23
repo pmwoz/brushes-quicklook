@@ -111,12 +111,6 @@ unsafe fn preview(
         unsafe { *error = ptr::null_mut() };
     }
     let result = catch_unwind(|| {
-        let (full, first): (fn(_, _) -> _, fn(_, _, _) -> _) = match format {
-            BQK_FORMAT_ABR => (preview_abr, preview_abr_first_available),
-            BQK_FORMAT_BRUSH => (preview_brush, preview_brush_first_available),
-            BQK_FORMAT_BRUSHSET => (preview_brushset, preview_brushset_first_available),
-            _ => return Err(format!("unknown brush format: {format}")),
-        };
         if len > isize::MAX as usize || (bytes.is_null() && len != 0) {
             return Err("invalid input buffer".to_owned());
         }
@@ -126,9 +120,14 @@ unsafe fn preview(
             unsafe { std::slice::from_raw_parts(bytes, len) }
         };
         let opts = PreviewOptions { max_cell };
-        let set = match first_available {
-            None => full(bytes, opts),
-            Some(count) => first(bytes, opts, count),
+        let set = match (format, first_available) {
+            (BQK_FORMAT_ABR, None) => preview_abr(bytes, opts),
+            (BQK_FORMAT_ABR, Some(n)) => preview_abr_first_available(bytes, opts, n),
+            (BQK_FORMAT_BRUSH, None) => preview_brush(bytes, opts),
+            (BQK_FORMAT_BRUSH, Some(n)) => preview_brush_first_available(bytes, opts, n),
+            (BQK_FORMAT_BRUSHSET, None) => preview_brushset(bytes, opts),
+            (BQK_FORMAT_BRUSHSET, Some(n)) => preview_brushset_first_available(bytes, opts, n),
+            _ => return Err(format!("unknown brush format: {format}")),
         }
         .map_err(|e| e.to_string())?;
         let entries = set.entries.into_iter().map(convert_entry).collect();

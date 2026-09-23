@@ -27,7 +27,7 @@ final class PreviewTests: XCTestCase {
         XCTAssertTrue(reason.contains("too large"))
     }
 
-    func testFirstAvailableReturnsOnlyTheRequestedAvailableTips() throws {
+    func testFirstAvailableLimitsEntriesInSetOrder() throws {
         let file = try copyFixture("ordered_set", extension: "brushset")
         defer { try? FileManager.default.removeItem(at: file) }
         let full = try BrushPreviewSet.load(file, maxCell: 8, timeout: 10)
