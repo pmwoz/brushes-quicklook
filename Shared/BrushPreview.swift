@@ -62,7 +62,7 @@ extension BrushPreviewSet {
 
     /// Reads and parses `url` on a background queue. Throws when the file is not a brush
     /// file, is above `maxFileSize`, cannot be read, fails to parse, or takes longer than `timeout`.
-    static func load(_ url: URL, maxCell: Int, timeout: TimeInterval) throws -> BrushPreviewSet {
+    static func load(_ url: URL, maxCell: Int, firstAvailable: Int? = nil, timeout: TimeInterval) throws -> BrushPreviewSet {
         guard let format = BrushFormat(url: url) else {
             throw BrushPreviewError(message: "Unrecognised brush file extension: \(url.pathExtension)")
         }
@@ -77,7 +77,7 @@ extension BrushPreviewSet {
         let semaphore = DispatchSemaphore(value: 0)
         let deadline = DispatchTime.now() + timeout
         DispatchQueue.global(qos: .userInitiated).async {
-            let parsed = Result { try read(url, format: format, maxCell: maxCell) }
+            let parsed = Result { try read(url, format: format, maxCell: maxCell, firstAvailable: firstAvailable) }
             result.withLock { $0 = parsed }
             semaphore.signal()
         }
@@ -87,11 +87,15 @@ extension BrushPreviewSet {
         return try result.withLock { $0! }.get()
     }
 
-    private static func read(_ url: URL, format: BrushFormat, maxCell: Int) throws -> BrushPreviewSet {
+    private static func read(_ url: URL, format: BrushFormat, maxCell: Int, firstAvailable: Int?) throws -> BrushPreviewSet {
         let data = try Data(contentsOf: url)
         var error: UnsafeMutablePointer<CChar>?
         let set = data.withUnsafeBytes { bytes in
-            bqk_preview(bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count, format.cValue, UInt32(maxCell), &error)
+            let base = bytes.bindMemory(to: UInt8.self).baseAddress
+            if let firstAvailable {
+                return bqk_preview_first_available(base, bytes.count, format.cValue, UInt32(maxCell), firstAvailable, &error)
+            }
+            return bqk_preview(base, bytes.count, format.cValue, UInt32(maxCell), &error)
         }
         defer { bqk_string_free(error) }
         guard let set else {

@@ -1,6 +1,7 @@
 use brushkit_preview::{
     GrayscaleBitmap, PreviewEntry, PreviewOptions, SourceDimensions, TipPreview, UnavailableReason,
-    preview_abr, preview_brush, preview_brushset,
+    preview_abr, preview_abr_first_available, preview_brush, preview_brush_first_available,
+    preview_brushset, preview_brushset_first_available,
 };
 use std::ffi::{CString, c_char, c_uint};
 use std::panic::catch_unwind;
@@ -83,14 +84,37 @@ pub unsafe extern "C" fn bqk_preview(
     max_cell: u32,
     error: *mut *mut c_char,
 ) -> *mut PreviewSet {
+    unsafe { preview(bytes, len, format, max_cell, None, error) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bqk_preview_first_available(
+    bytes: *const u8,
+    len: usize,
+    format: c_uint,
+    max_cell: u32,
+    count: usize,
+    error: *mut *mut c_char,
+) -> *mut PreviewSet {
+    unsafe { preview(bytes, len, format, max_cell, Some(count), error) }
+}
+
+unsafe fn preview(
+    bytes: *const u8,
+    len: usize,
+    format: c_uint,
+    max_cell: u32,
+    first_available: Option<usize>,
+    error: *mut *mut c_char,
+) -> *mut PreviewSet {
     if !error.is_null() {
         unsafe { *error = ptr::null_mut() };
     }
     let result = catch_unwind(|| {
-        let preview = match format {
-            BQK_FORMAT_ABR => preview_abr,
-            BQK_FORMAT_BRUSH => preview_brush,
-            BQK_FORMAT_BRUSHSET => preview_brushset,
+        let (full, first): (fn(_, _) -> _, fn(_, _, _) -> _) = match format {
+            BQK_FORMAT_ABR => (preview_abr, preview_abr_first_available),
+            BQK_FORMAT_BRUSH => (preview_brush, preview_brush_first_available),
+            BQK_FORMAT_BRUSHSET => (preview_brushset, preview_brushset_first_available),
             _ => return Err(format!("unknown brush format: {format}")),
         };
         if len > isize::MAX as usize || (bytes.is_null() && len != 0) {
@@ -101,7 +125,12 @@ pub unsafe extern "C" fn bqk_preview(
         } else {
             unsafe { std::slice::from_raw_parts(bytes, len) }
         };
-        let set = preview(bytes, PreviewOptions { max_cell }).map_err(|e| e.to_string())?;
+        let opts = PreviewOptions { max_cell };
+        let set = match first_available {
+            None => full(bytes, opts),
+            Some(count) => first(bytes, opts, count),
+        }
+        .map_err(|e| e.to_string())?;
         let entries = set.entries.into_iter().map(convert_entry).collect();
         Ok(Box::new(PreviewSet {
             name: set.set_name.map(c_string),
@@ -173,20 +202,95 @@ mod tests {
     use super::*;
     use std::ffi::CStr;
 
+    unsafe fn call(
+        bytes: &[u8],
+        format: c_uint,
+        count: Option<usize>,
+        error: *mut *mut c_char,
+    ) -> *mut PreviewSet {
+        let (bytes, len) = (bytes.as_ptr(), bytes.len());
+        unsafe {
+            match count {
+                None => bqk_preview(bytes, len, format, 160, error),
+                Some(count) => bqk_preview_first_available(bytes, len, format, 160, count, error),
+            }
+        }
+    }
+
+    fn corpus() -> Vec<(std::path::PathBuf, c_uint)> {
+        let mut files = Vec::new();
+        for (target, format) in [
+            ("preview_abr", BQK_FORMAT_ABR),
+            ("preview_brush", BQK_FORMAT_BRUSH),
+            ("preview_brushset", BQK_FORMAT_BRUSHSET),
+        ] {
+            let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/corpus")
+                .join(target);
+            for file in std::fs::read_dir(directory).unwrap() {
+                let path = file.unwrap().path();
+                if path.is_file() {
+                    files.push((path, format));
+                }
+            }
+        }
+        files
+    }
+
     fn assert_set_or_error(bytes: &[u8], format: c_uint) {
+        for count in [None, Some(1)] {
+            let mut error = ptr::null_mut();
+            unsafe {
+                let set = call(bytes, format, count, &mut error);
+                if set.is_null() {
+                    assert!(!error.is_null());
+                    let message = CStr::from_ptr(error).to_string_lossy().into_owned();
+                    bqk_string_free(error);
+                    assert!(!message.is_empty());
+                    assert!(!message.starts_with("brush parser panicked"), "{message}");
+                } else {
+                    bqk_preview_set_free(set);
+                    assert!(error.is_null());
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Copied {
+        name: String,
+        width: u32,
+        height: u32,
+        pixels: Option<Vec<u8>>,
+        source_width: u32,
+        source_height: u32,
+    }
+
+    fn copy_entries(bytes: &[u8], format: c_uint, count: Option<usize>) -> Option<Vec<Copied>> {
         let mut error = ptr::null_mut();
         unsafe {
-            let set = bqk_preview(bytes.as_ptr(), bytes.len(), format, 160, &mut error);
+            let set = call(bytes, format, count, &mut error);
             if set.is_null() {
-                assert!(!error.is_null());
-                let message = CStr::from_ptr(error).to_string_lossy().into_owned();
                 bqk_string_free(error);
-                assert!(!message.is_empty());
-                assert!(!message.starts_with("brush parser panicked"), "{message}");
-            } else {
-                bqk_preview_set_free(set);
-                assert!(error.is_null());
+                return None;
             }
+            let entries = (0..bqk_preview_set_count(set))
+                .map(|index| {
+                    let entry = bqk_preview_set_entry(set, index);
+                    let size = entry.width as usize * entry.height as usize;
+                    Copied {
+                        name: CStr::from_ptr(entry.name).to_string_lossy().into_owned(),
+                        width: entry.width,
+                        height: entry.height,
+                        pixels: (!entry.pixels.is_null())
+                            .then(|| std::slice::from_raw_parts(entry.pixels, size).to_vec()),
+                        source_width: entry.source_width,
+                        source_height: entry.source_height,
+                    }
+                })
+                .collect();
+            bqk_preview_set_free(set);
+            Some(entries)
         }
     }
 
@@ -223,19 +327,27 @@ mod tests {
 
     #[test]
     fn corpus_replay() {
-        for (target, format) in [
-            ("preview_abr", BQK_FORMAT_ABR),
-            ("preview_brush", BQK_FORMAT_BRUSH),
-            ("preview_brushset", BQK_FORMAT_BRUSHSET),
-        ] {
-            let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/corpus")
-                .join(target);
-            for file in std::fs::read_dir(directory).unwrap() {
-                let path = file.unwrap().path();
-                if path.is_file() {
-                    assert_set_or_error(&std::fs::read(path).unwrap(), format);
-                }
+        for (path, format) in corpus() {
+            assert_set_or_error(&std::fs::read(path).unwrap(), format);
+        }
+    }
+
+    #[test]
+    fn first_available_matches_the_available_entries_of_the_full_preview() {
+        for (path, format) in corpus() {
+            let bytes = std::fs::read(&path).unwrap();
+            let full = copy_entries(&bytes, format, None);
+            for count in [0, 1, 2, 3, usize::MAX] {
+                let first = copy_entries(&bytes, format, Some(count));
+                let expected = full.as_ref().map(|entries| {
+                    entries
+                        .iter()
+                        .filter(|entry| entry.pixels.is_some())
+                        .take(count)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                });
+                assert_eq!(first, expected, "{} with count {count}", path.display());
             }
         }
     }

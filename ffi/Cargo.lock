@@ -37,8 +37,8 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "brushkit-abr"
-version = "0.2.0"
-source = "git+https://github.com/pmwoz/brushkit?tag=v0.2.0#053d170c6c98a5d6a265f872e9af3fdbb50f27ba"
+version = "0.3.0"
+source = "git+https://github.com/pmwoz/brushkit?tag=v0.3.0#1d2d2899435a47d5f077acc7d3a5f0f33495b59e"
 dependencies = [
  "byteorder",
  "flate2",
@@ -54,13 +54,16 @@ dependencies = [
 
 [[package]]
 name = "brushkit-preview"
-version = "0.2.0"
-source = "git+https://github.com/pmwoz/brushkit?tag=v0.2.0#053d170c6c98a5d6a265f872e9af3fdbb50f27ba"
+version = "0.3.0"
+source = "git+https://github.com/pmwoz/brushkit?tag=v0.3.0#1d2d2899435a47d5f077acc7d3a5f0f33495b59e"
 dependencies = [
  "brushkit-abr",
  "image",
  "plist",
+ "png",
  "zip",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -179,8 +182,6 @@ dependencies = [
  "moxcms",
  "num-traits",
  "png",
- "zune-core",
- "zune-jpeg",
 ]
 
 [[package]]

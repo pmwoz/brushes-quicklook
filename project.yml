@@ -139,6 +139,8 @@ targets:
         buildPhase: resources
       - path: ffi/tests/corpus/preview_brush/oversized_png
         buildPhase: resources
+      - path: ffi/tests/corpus/preview_brushset/ordered_set
+        buildPhase: resources
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
