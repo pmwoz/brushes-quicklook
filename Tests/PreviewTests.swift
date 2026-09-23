@@ -27,6 +27,16 @@ final class PreviewTests: XCTestCase {
         XCTAssertTrue(reason.contains("too large"))
     }
 
+    func testFirstAvailableLimitsEntriesInSetOrder() throws {
+        let file = try copyFixture("ordered_set", extension: "brushset")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let full = try BrushPreviewSet.load(file, maxCell: 8, timeout: 10)
+        XCTAssertEqual(full.entries.count, 2)
+        let first = try BrushPreviewSet.load(file, maxCell: 8, firstAvailable: 1, timeout: 10)
+        XCTAssertEqual(first.entries.map(\.name), [full.entries[0].name])
+        guard case .available = first.entries.first?.tip else { return XCTFail("Expected an available tip") }
+    }
+
     func testPartialSourcePairIsUnknown() {
         "Brush".withCString { name in
             let entry = bqk_entry(name: name, width: 0, height: 0, pixels: nil, unavailable_reason: nil, source_width: 320, source_height: 0)
@@ -136,9 +146,9 @@ final class PreviewTests: XCTestCase {
         XCTAssertNil(controller.preview)
     }
 
-    private func copyFixture(_ name: String) throws -> URL {
+    private func copyFixture(_ name: String, extension fileExtension: String = "brush") throws -> URL {
         let source = try XCTUnwrap(Bundle(for: Self.self).url(forResource: name, withExtension: nil))
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("brush")
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(fileExtension)
         try FileManager.default.copyItem(at: source, to: file)
         return file
     }

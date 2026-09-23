@@ -26,6 +26,8 @@ typedef struct bqk_entry {
 /* Parses len bytes as format. Tips are downsampled so the larger side is at most max_cell.
    Returns NULL on failure and stores a message in *error, freed by the caller with bqk_string_free. */
 bqk_preview_set *bqk_preview(const uint8_t *bytes, size_t len, bqk_format format, uint32_t max_cell, char **error);
+/* Like bqk_preview, but returns only the first count entries with an available tip, in bqk_preview order. Later entries are not built. */
+bqk_preview_set *bqk_preview_first_available(const uint8_t *bytes, size_t len, bqk_format format, uint32_t max_cell, size_t count, char **error);
 
 /* NULL when the file carries no set name. */
 const char *bqk_preview_set_name(const bqk_preview_set *set);
