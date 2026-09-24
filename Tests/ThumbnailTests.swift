@@ -27,6 +27,13 @@ final class ThumbnailTests: XCTestCase {
         XCTAssertEqual(try pixels(image), Data([1]))
     }
 
+    func testTipCountIsOneBelow64PointsOnTheShorterSide() {
+        XCTAssertEqual(BrushThumbnail.tipCount(for: CGSize(width: 16, height: 16)), 1)
+        XCTAssertEqual(BrushThumbnail.tipCount(for: CGSize(width: 63, height: 63)), 1)
+        XCTAssertEqual(BrushThumbnail.tipCount(for: CGSize(width: 128, height: 32)), 1)
+        XCTAssertEqual(BrushThumbnail.tipCount(for: CGSize(width: 64, height: 64)), 4)
+    }
+
     func testGridUsesFirstFourUsableTipsInOrderAt64Points() throws {
         let tips = [unavailable, tip(1), tip(2), unavailable,
                     .available(width: 0, height: 1, pixels: Data()), tip(3), tip(4), tip(5)]

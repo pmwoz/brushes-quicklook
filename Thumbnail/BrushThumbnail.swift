@@ -9,13 +9,17 @@ struct BrushThumbnail {
 
     static let maxTips = 4
 
+    static func tipCount(for size: CGSize) -> Int {
+        min(size.width, size.height) >= 64 ? maxTips : 1
+    }
+
     let badge: String
     let layout: Layout
 
     init(badge: String, tips: [BrushTip], size: CGSize) {
         self.badge = badge
-        let images = Array(tips.lazy.compactMap { BrushTipImage.make(from: $0) }.prefix(Self.maxTips))
-        if images.count == Self.maxTips, min(size.width, size.height) >= 64 {
+        let images = Array(tips.lazy.compactMap { BrushTipImage.make(from: $0) }.prefix(Self.tipCount(for: size)))
+        if images.count == Self.maxTips {
             layout = .grid(images)
         } else if let first = images.first {
             layout = .single(first)
@@ -27,7 +31,7 @@ struct BrushThumbnail {
     static func load(_ url: URL, maximumSize: CGSize, scale: CGFloat) -> BrushThumbnail {
         let pixels = (max(maximumSize.width, maximumSize.height) * scale).rounded(.up)
         let maxCell = Int(min(max(pixels, 1), 256))
-        let set = try? BrushPreviewSet.load(url, maxCell: maxCell, firstAvailable: Self.maxTips, timeout: 5)
+        let set = try? BrushPreviewSet.load(url, maxCell: maxCell, firstAvailable: tipCount(for: maximumSize), timeout: 5)
         return BrushThumbnail(
             badge: url.pathExtension.uppercased(),
             tips: set?.entries.map(\.tip) ?? [],
