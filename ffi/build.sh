@@ -1,12 +1,13 @@
 #!/bin/sh
 set -eu
 
-export PATH="$HOME/.cargo/bin:$PATH:/opt/homebrew/bin:/usr/local/bin"
+# Xcode.app started from the Dock passes no user PATH. These are the rustup.rs and Homebrew install locations.
+export PATH="$PATH:$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:/usr/local/opt/rustup/bin"
 export MACOSX_DEPLOYMENT_TARGET
 cd "$(dirname "$0")/.."
 
 if ! command -v rustup >/dev/null 2>&1; then
-    echo "error: rustup not found on PATH ($PATH). Install rustup (https://rustup.rs) so the build uses the Rust version pinned in rust-toolchain.toml." >&2
+    echo "error: rustup not found on PATH ($PATH). Install rustup (https://rustup.rs or brew install rustup) so the build uses the Rust version pinned in rust-toolchain.toml." >&2
     exit 1
 fi
 # Prepend the toolchain directory, not just call its cargo, so the rustc that cargo runs is pinned too.
