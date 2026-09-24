@@ -24,16 +24,19 @@ typedef struct bqk_entry {
 } bqk_entry;
 
 /* Parses len bytes as format. Tips are downsampled so the larger side is at most max_cell.
+   bytes must be readable for len bytes and may be NULL only when len is 0. error may be NULL.
    Returns NULL on failure and stores a message in *error, freed by the caller with bqk_string_free. */
 bqk_preview_set *bqk_preview(const uint8_t *bytes, size_t len, bqk_format format, uint32_t max_cell, char **error);
 /* Like bqk_preview, but returns only the first count entries with an available tip, in bqk_preview order. Later entries are not built. */
 bqk_preview_set *bqk_preview_first_available(const uint8_t *bytes, size_t len, bqk_format format, uint32_t max_cell, size_t count, char **error);
 
+/* In the three accessors below, set must be non-NULL, returned by bqk_preview or bqk_preview_first_available, and not yet freed. */
 /* NULL when the file carries no set name. */
 const char *bqk_preview_set_name(const bqk_preview_set *set);
 size_t bqk_preview_set_count(const bqk_preview_set *set);
 /* index must be below bqk_preview_set_count. */
 bqk_entry bqk_preview_set_entry(const bqk_preview_set *set, size_t index);
+/* Both free functions accept NULL. Pass only a pointer this library returned, and free it once. */
 void bqk_preview_set_free(bqk_preview_set *set);
 void bqk_string_free(char *s);
 
