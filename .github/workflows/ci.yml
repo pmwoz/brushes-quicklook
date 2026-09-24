@@ -27,6 +27,8 @@ jobs:
         run: cargo clippy --manifest-path ffi/Cargo.toml --all-targets -- -D warnings
       - name: Test FFI
         run: cargo test --manifest-path ffi/Cargo.toml
+      - name: Check fuzz corpus
+        run: scripts/check-corpus.sh
       - name: Generate Xcode project
         run: xcodegen generate
       - name: Build Debug
