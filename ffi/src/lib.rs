@@ -223,14 +223,18 @@ mod tests {
 
     fn corpus() -> Vec<(std::path::PathBuf, c_uint)> {
         let mut files = Vec::new();
-        for (target, format) in [
-            ("preview_abr", BQK_FORMAT_ABR),
-            ("preview_brush", BQK_FORMAT_BRUSH),
-            ("preview_brushset", BQK_FORMAT_BRUSHSET),
-        ] {
-            let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/corpus")
-                .join(target);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
+        for directory in std::fs::read_dir(root).unwrap() {
+            let directory = directory.unwrap().path();
+            if !directory.is_dir() {
+                continue;
+            }
+            let format = match directory.file_name().unwrap().to_str().unwrap() {
+                "preview_abr" => BQK_FORMAT_ABR,
+                "preview_brush" => BQK_FORMAT_BRUSH,
+                "preview_brushset" => BQK_FORMAT_BRUSHSET,
+                _ => panic!("{} has no format mapping in corpus()", directory.display()),
+            };
             for file in std::fs::read_dir(directory).unwrap() {
                 let path = file.unwrap().path();
                 if path.is_file() {
