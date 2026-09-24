@@ -14,15 +14,13 @@ for arch in $ARCHS; do
     esac
 done
 
-if command -v rustup >/dev/null 2>&1; then
-    installed=$(rustup target list --installed)
+if installed=$(rustup target list --installed 2>/dev/null); then
     missing=
     for target in $targets; do
         echo "$installed" | grep -qx "$target" || missing="$missing $target"
     done
     if [ -n "$missing" ]; then
-        echo "Missing Rust target(s):$missing" >&2
-        echo "Install with: rustup target add$missing" >&2
+        echo "error: Missing Rust target(s):$missing. Install with: rustup target add$missing" >&2
         exit 1
     fi
 fi
