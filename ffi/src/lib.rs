@@ -1,3 +1,8 @@
+#![allow(
+    clippy::missing_safety_doc,
+    reason = "the C contract is documented in include/brushkit_ffi.h"
+)]
+
 use brushkit_preview::{
     GrayscaleBitmap, PreviewEntry, PreviewOptions, SourceDimensions, TipPreview, UnavailableReason,
     preview_abr, preview_abr_first_available, preview_brush, preview_brush_first_available,
