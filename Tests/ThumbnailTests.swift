@@ -57,6 +57,18 @@ final class ThumbnailTests: XCTestCase {
         XCTAssertEqual(image.height, 4)
     }
 
+    func testZeroAreaTipDoesNotTakeTheSingleTipSlot() throws {
+        let source = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "zero_area_tip", withExtension: nil))
+        let file = temporaryFile(extension: "abr")
+        try FileManager.default.copyItem(at: source, to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let thumbnail = BrushThumbnail.load(file, maximumSize: CGSize(width: 32, height: 32), scale: 1)
+        guard case let .single(image) = thumbnail.layout else { return XCTFail("Expected the drawable tip after the zero-area one") }
+        XCTAssertEqual(image.width, 1)
+        XCTAssertEqual(image.height, 1)
+    }
+
     func testCorruptAndMissingFilesShowOnlyFormatBadge() throws {
         let file = temporaryFile(extension: "abr")
         try Data("Not a brush file".utf8).write(to: file)

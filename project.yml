@@ -141,6 +141,8 @@ targets:
         buildPhase: resources
       - path: ffi/tests/corpus/preview_brushset/ordered_set
         buildPhase: resources
+      - path: ffi/tests/corpus/preview_abr/zero_area_tip
+        buildPhase: resources
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
