@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-export PATH="$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH:/opt/homebrew/bin:/usr/local/bin"
 export MACOSX_DEPLOYMENT_TARGET
 cd "$(dirname "$0")/.."
 
