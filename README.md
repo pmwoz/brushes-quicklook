@@ -48,8 +48,10 @@ supported and show as unavailable, and Procreate brushes without their own
 
 ## Building
 
-Requires Xcode, a Rust toolchain with the `aarch64-apple-darwin` and
-`x86_64-apple-darwin` targets, and `xcodegen`.
+Requires Xcode, `rustup` and `xcodegen`. `rust-toolchain.toml` pins the Rust
+version, the `clippy` component and both macOS targets. `rustup` installs them
+on the first `cargo` run, so a local build and CI use the same Rust. A Rust
+update is a change to that file.
 
 ```
 xcodegen generate
