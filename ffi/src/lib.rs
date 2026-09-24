@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::missing_safety_doc,
     reason = "the C contract is documented in include/brushkit_ffi.h"
 )]
