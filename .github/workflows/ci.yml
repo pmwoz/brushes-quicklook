@@ -19,8 +19,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7
-      - name: Install Intel Rust target
-        run: rustup target add x86_64-apple-darwin
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install --no-self-update
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Lint FFI

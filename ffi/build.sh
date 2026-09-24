@@ -14,17 +14,6 @@ for arch in $ARCHS; do
     esac
 done
 
-if installed=$(rustup target list --installed 2>/dev/null); then
-    missing=
-    for target in $targets; do
-        echo "$installed" | grep -qx "$target" || missing="$missing $target"
-    done
-    if [ -n "$missing" ]; then
-        echo "error: Missing Rust target(s):$missing. Install with: rustup target add$missing" >&2
-        exit 1
-    fi
-fi
-
 set --
 for target in $targets; do
     cargo build --release --manifest-path ffi/Cargo.toml --target "$target"
