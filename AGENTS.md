@@ -13,7 +13,7 @@ English: code, comments, commits, issues, pull requests and docs.
 
 ## Build and test
 
-A contributor needs Xcode, a Rust toolchain and `xcodegen`. `README.md` lists
+A contributor needs Xcode, `rustup` and `xcodegen`. `README.md` lists
 the commands. Nothing in the build or the tests reaches a private repository,
 a token or a secret. If a change would require one, it is the wrong change.
 

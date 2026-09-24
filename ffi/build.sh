@@ -5,6 +5,14 @@ export PATH="$HOME/.cargo/bin:$PATH"
 export MACOSX_DEPLOYMENT_TARGET
 cd "$(dirname "$0")/.."
 
+if ! command -v rustup >/dev/null 2>&1; then
+    echo "error: rustup not found on PATH ($PATH). Install rustup (https://rustup.rs) so the build uses the Rust version pinned in rust-toolchain.toml." >&2
+    exit 1
+fi
+# Prepend the toolchain directory, not just call its cargo, so the rustc that cargo runs is pinned too.
+cargo=$(rustup which cargo)
+PATH="${cargo%/*}:$PATH"
+
 targets=
 for arch in $ARCHS; do
     case "$arch" in
