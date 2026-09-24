@@ -69,6 +69,7 @@ Spotlight skips, so an unregistered build is not registered again by indexing.
 Tests:
 
 `ffi/tests/corpus` mirrors brushkit's fuzz seed corpus and is replayed by `cargo test`.
+`scripts/check-corpus.sh` checks the mirror against the pinned brushkit tag.
 `scripts/preview-hostile.sh` previews a folder of corrupt files through Finder's
 Quick Look and reports which ones the extension handled and whether it crashed.
 
