@@ -341,6 +341,14 @@ mod tests {
         for (path, format) in corpus() {
             let bytes = std::fs::read(&path).unwrap();
             let full = copy_entries(&bytes, format, None);
+            for entry in full.iter().flatten().filter(|entry| entry.pixels.is_some()) {
+                assert!(
+                    entry.width > 0 && entry.height > 0,
+                    "{}: {} is available with zero area",
+                    path.display(),
+                    entry.name
+                );
+            }
             for count in [0, 1, 2, 3, usize::MAX] {
                 let first = copy_entries(&bytes, format, Some(count));
                 let expected = full.as_ref().map(|entries| {
