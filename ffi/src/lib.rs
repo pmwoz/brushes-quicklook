@@ -226,6 +226,9 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
         for directory in std::fs::read_dir(root).unwrap() {
             let directory = directory.unwrap().path();
+            if !directory.is_dir() {
+                continue;
+            }
             let format = match directory.file_name().unwrap().to_str().unwrap() {
                 "preview_abr" => BQK_FORMAT_ABR,
                 "preview_brush" => BQK_FORMAT_BRUSH,
