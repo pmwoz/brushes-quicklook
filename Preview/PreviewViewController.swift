@@ -29,10 +29,13 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
     }
 
     /// A single brush fills a 380 pt well, so it is decoded again at a size that stays sharp there.
+    /// Both decodes share one timeout, and a failed sharper decode keeps the first result.
     private nonisolated static func load(_ url: URL, timeout: TimeInterval) throws -> BrushPreviewSet {
+        let start = Date()
         let set = try BrushPreviewSet.load(url, maxCell: 256, timeout: timeout)
-        guard set.entries.count == 1 else { return set }
-        return try BrushPreviewSet.load(url, maxCell: 768, timeout: timeout)
+        let remaining = timeout - Date().timeIntervalSince(start)
+        guard set.entries.count == 1, remaining > 0 else { return set }
+        return (try? BrushPreviewSet.load(url, maxCell: 768, timeout: remaining)) ?? set
     }
 
     func beginPreview(completionHandler: @escaping (Error?) -> Void) -> UUID {
