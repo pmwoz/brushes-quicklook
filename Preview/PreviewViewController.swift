@@ -15,14 +15,16 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
         let id = beginPreview(completionHandler: handler)
         Task {
             let timeout = Self.previewTimeout
-            let result: Result<BrushPreviewSet, any Error> = await withCheckedContinuation { continuation in
+            let result: Result<(BrushFormat, BrushPreviewSet), any Error> = await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     continuation.resume(returning: Result {
-                        try BrushPreviewSet.load(url, maxCell: 256, timeout: timeout)
+                        (try BrushFormat(url: url), try BrushPreviewSet.load(url, maxCell: 256, timeout: timeout))
                     })
                 }
             }
-            finishPreview(id, result: result, fileName: url.lastPathComponent)
+            finishPreview(id, result: result.map { format, set in
+                PreviewGrid(fileName: url.lastPathComponent, format: format, set: set)
+            })
         }
     }
 
@@ -39,13 +41,13 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
         return id
     }
 
-    func finishPreview(_ id: UUID, result: Result<BrushPreviewSet, any Error>, fileName: String) {
+    func finishPreview(_ id: UUID, result: Result<PreviewGrid, any Error>) {
         guard let active = request, active.id == id else { return }
         request = nil
         view.subviews.forEach { $0.removeFromSuperview() }
         switch result {
-        case .success(let set):
-            let hosted = NSHostingView(rootView: PreviewGrid(title: set.name ?? fileName, set: set))
+        case .success(let grid):
+            let hosted = NSHostingView(rootView: grid)
             preview = hosted
             install(hosted)
             active.completion(nil)

@@ -94,14 +94,14 @@ final class PreviewTests: XCTestCase {
             BrushEntry(name: "Same name", tip: .available(width: 1, height: 1, pixels: Data([255])), sourceDimensions: nil),
             BrushEntry(name: "Same name", tip: .unavailable(reason: "no Shape.png"), sourceDimensions: nil),
         ])
-        controller.finishPreview(current, result: .success(set), fileName: "current.brushset")
-        controller.finishPreview(old, result: .success(BrushPreviewSet(name: "Stale", entries: [])), fileName: "old.brush")
-        controller.finishPreview(current, result: .failure(BrushPreviewError(message: "Late")), fileName: "current.brushset")
+        controller.finishPreview(current, result: .success(PreviewGrid(fileName: "current.brushset", format: .brushset, set: set)))
+        controller.finishPreview(old, result: .success(PreviewGrid(fileName: "old.brush", format: .brush, set: BrushPreviewSet(name: "Stale", entries: []))))
+        controller.finishPreview(current, result: .failure(BrushPreviewError(message: "Late")))
         XCTAssertEqual(newCompletions.count, 1)
         XCTAssertNil(newCompletions[0])
         XCTAssertEqual(oldCompletions.count, 1)
         XCTAssertTrue(controller.view.subviews.contains { $0 === controller.preview })
-        XCTAssertEqual(controller.preview?.rootView.title, "Current set")
+        XCTAssertEqual(controller.preview?.rootView.setName, "Current set")
         XCTAssertEqual(controller.preview?.rootView.cells.count, 2)
         XCTAssertNotNil(controller.preview?.rootView.cells[0].image)
         XCTAssertNil(controller.preview?.rootView.cells[1].image)
@@ -126,7 +126,8 @@ final class PreviewTests: XCTestCase {
         XCTAssertNil(completions.first ?? nil)
         let hosted = try XCTUnwrap(controller.preview)
         XCTAssertTrue(controller.view.subviews.contains { $0 === hosted })
-        XCTAssertEqual(hosted.rootView.title, file.lastPathComponent)
+        XCTAssertEqual(hosted.rootView.fileName, file.lastPathComponent)
+        XCTAssertEqual(hosted.rootView.format, .brush)
         XCTAssertEqual(hosted.rootView.cells.count, 1)
         let cell = try XCTUnwrap(hosted.rootView.cells.first)
         XCTAssertEqual(cell.name, "A")
@@ -139,11 +140,17 @@ final class PreviewTests: XCTestCase {
         let controller = PreviewViewController()
         var completions: [Error?] = []
         let id = controller.beginPreview { completions.append($0) }
-        controller.finishPreview(id, result: .failure(BrushPreviewError(message: "Broken brush")), fileName: "bad.abr")
-        controller.finishPreview(id, result: .success(BrushPreviewSet(name: nil, entries: [])), fileName: "bad.abr")
+        controller.finishPreview(id, result: .failure(BrushPreviewError(message: "Broken brush")))
+        controller.finishPreview(id, result: .success(PreviewGrid(fileName: "bad.abr", format: .abr, set: BrushPreviewSet(name: nil, entries: []))))
         XCTAssertEqual(completions.count, 1)
         XCTAssertEqual((completions[0] as NSError?)?.userInfo[NSLocalizedDescriptionKey] as? String, "Broken brush")
         XCTAssertNil(controller.preview)
+    }
+
+    func testCountsNameBrushesAndThoseWithoutPreview() {
+        XCTAssertEqual(PreviewGrid.countsText(brushes: 1, unavailable: 0), "1 brush")
+        XCTAssertEqual(PreviewGrid.countsText(brushes: 26, unavailable: 3), "26 brushes · 3 without preview")
+        XCTAssertEqual(PreviewGrid.countsText(brushes: 16, unavailable: 16), "16 brushes · none can be previewed yet")
     }
 
     private func copyFixture(_ name: String, extension fileExtension: String = "brush") throws -> URL {

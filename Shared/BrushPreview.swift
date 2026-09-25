@@ -5,12 +5,12 @@ import os
 enum BrushFormat: Sendable {
     case abr, brush, brushset
 
-    init?(url: URL) {
+    init(url: URL) throws {
         switch url.pathExtension.lowercased() {
         case "abr": self = .abr
         case "brush": self = .brush
         case "brushset": self = .brushset
-        default: return nil
+        default: throw BrushPreviewError(message: "Unrecognised brush file extension: \(url.pathExtension)")
         }
     }
 
@@ -63,9 +63,7 @@ extension BrushPreviewSet {
     /// Reads and parses `url` on a background queue. Throws when the file is not a brush
     /// file, is above `maxFileSize`, cannot be read, fails to parse, or takes longer than `timeout`.
     static func load(_ url: URL, maxCell: Int, firstAvailable: Int? = nil, timeout: TimeInterval) throws -> BrushPreviewSet {
-        guard let format = BrushFormat(url: url) else {
-            throw BrushPreviewError(message: "Unrecognised brush file extension: \(url.pathExtension)")
-        }
+        let format = try BrushFormat(url: url)
         let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
         if let fileSize, fileSize > maxFileSize {
             let size = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .binary)
