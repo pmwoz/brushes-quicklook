@@ -101,10 +101,11 @@ final class PreviewTests: XCTestCase {
         XCTAssertNil(newCompletions[0])
         XCTAssertEqual(oldCompletions.count, 1)
         XCTAssertTrue(controller.view.subviews.contains { $0 === controller.preview })
-        XCTAssertEqual(controller.preview?.rootView.setName, "Current set")
-        XCTAssertEqual(controller.preview?.rootView.cells.count, 2)
-        XCTAssertNotNil(controller.preview?.rootView.cells[0].image)
-        XCTAssertNil(controller.preview?.rootView.cells[1].image)
+        let grid = controller.preview?.rootView.grid
+        XCTAssertEqual(grid?.setName, "Current set")
+        XCTAssertEqual(grid?.cells.count, 2)
+        XCTAssertNotNil(grid?.cells[0].image)
+        XCTAssertNil(grid?.cells[1].image)
         _ = controller.beginPreview { _ in }
         XCTAssertNil(controller.preview, "Changing files clears the previous content")
     }
@@ -126,25 +127,49 @@ final class PreviewTests: XCTestCase {
         XCTAssertNil(completions.first ?? nil)
         let hosted = try XCTUnwrap(controller.preview)
         XCTAssertTrue(controller.view.subviews.contains { $0 === hosted })
-        XCTAssertEqual(hosted.rootView.fileName, file.lastPathComponent)
-        XCTAssertEqual(hosted.rootView.format, .brush)
-        XCTAssertEqual(hosted.rootView.cells.count, 1)
-        let cell = try XCTUnwrap(hosted.rootView.cells.first)
+        let grid = try XCTUnwrap(hosted.rootView.grid)
+        XCTAssertEqual(grid.fileName, file.lastPathComponent)
+        XCTAssertEqual(grid.format, .brush)
+        XCTAssertEqual(grid.cells.count, 1)
+        let cell = try XCTUnwrap(grid.cells.first)
         XCTAssertEqual(cell.name, "A")
         XCTAssertEqual(cell.sourceDimensions, BrushSourceDimensions(width: 16, height: 8))
         XCTAssertNotNil(cell.image)
     }
 
     @MainActor
-    func testFailureCompletesOnceWithQuickLookDescription() {
+    func testFailureInstallsErrorViewAndCompletesOnceWithoutError() throws {
         let controller = PreviewViewController()
         var completions: [Error?] = []
         let id = controller.beginPreview { completions.append($0) }
-        controller.finishPreview(id, result: .failure(BrushPreviewError.damaged("Broken brush")))
+        controller.finishPreview(id, result: .failure(BrushPreviewError.damaged("block claims 9 bytes")))
         controller.finishPreview(id, result: .success(PreviewGrid(fileName: "bad.abr", format: .abr, set: BrushPreviewSet(name: nil, entries: []))))
         XCTAssertEqual(completions.count, 1)
-        XCTAssertEqual((completions[0] as NSError?)?.userInfo[NSLocalizedDescriptionKey] as? String, "Broken brush")
-        XCTAssertNil(controller.preview)
+        XCTAssertNil(completions[0])
+        let hosted = try XCTUnwrap(controller.preview)
+        XCTAssertTrue(controller.view.subviews.contains { $0 === hosted })
+        let failure = try XCTUnwrap(hosted.rootView.failure)
+        XCTAssertEqual(failure.message, "The file looks damaged or incomplete.")
+        XCTAssertEqual(failure.details, "block claims 9 bytes")
+    }
+
+    @MainActor
+    func testOnlyDamagedFilesHideTheParserMessageUnderDetails() {
+        let damaged = PreviewFailure(error: BrushPreviewError.damaged("malformed block at offset 4"))
+        XCTAssertEqual(damaged.message, "The file looks damaged or incomplete.")
+        XCTAssertEqual(damaged.details, "malformed block at offset 4")
+
+        let tooLarge = PreviewFailure(error: BrushPreviewError.tooLarge(size: 600 << 20, limit: 512 << 20))
+        XCTAssertEqual(tooLarge.message, "This file is 600 MB. Files above 512 MB are not previewed.")
+        XCTAssertNil(tooLarge.details)
+        let timedOut = PreviewFailure(error: BrushPreviewError.timedOut(10))
+        XCTAssertEqual(timedOut.message, "Previewing took longer than 10 seconds.")
+        XCTAssertNil(timedOut.details)
+
+        let denied = CocoaError(.fileReadNoPermission)
+        let unreadable = PreviewFailure(error: denied)
+        XCTAssertEqual(unreadable.message, denied.localizedDescription)
+        XCTAssertNil(unreadable.details)
     }
 
     func testCountsNameBrushesAndThoseWithoutPreview() {
@@ -164,5 +189,15 @@ final class PreviewTests: XCTestCase {
         let file = try copyFixture(name)
         defer { try? FileManager.default.removeItem(at: file) }
         return try BrushPreviewSet.load(file, maxCell: maxCell, timeout: 10)
+    }
+}
+
+private extension PreviewContent {
+    var grid: PreviewGrid? {
+        if case .grid(let grid) = self { grid } else { nil }
+    }
+
+    var failure: PreviewFailure? {
+        if case .failure(let failure) = self { failure } else { nil }
     }
 }

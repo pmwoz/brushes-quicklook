@@ -5,7 +5,7 @@ import SwiftUI
 final class PreviewViewController: NSViewController, @preconcurrency QLPreviewingController {
     private static let previewTimeout: TimeInterval = 10
     private var request: (id: UUID, completion: (Error?) -> Void)?
-    private(set) var preview: NSHostingView<PreviewGrid>?
+    private(set) var preview: NSHostingView<PreviewContent>?
 
     override func loadView() {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 760, height: 600))
@@ -52,20 +52,14 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
         guard let active = request, active.id == id else { return }
         request = nil
         view.subviews.forEach { $0.removeFromSuperview() }
-        switch result {
-        case .success(let grid):
-            let hosted = NSHostingView(rootView: grid)
-            preview = hosted
-            install(hosted)
-            active.completion(nil)
-        case .failure(let error):
-            // Quick Look shows a message only for an NSError carrying NSLocalizedDescriptionKey.
-            active.completion(NSError(
-                domain: Bundle.main.bundleIdentifier ?? "BrushesPreview",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]
-            ))
+        let content: PreviewContent = switch result {
+        case .success(let grid): .grid(grid)
+        case .failure(let error): .failure(PreviewFailure(error: error))
         }
+        let hosted = NSHostingView(rootView: content)
+        preview = hosted
+        install(hosted)
+        active.completion(nil)
     }
 
     private func install(_ content: NSView) {
@@ -77,5 +71,17 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
             content.topAnchor.constraint(equalTo: view.topAnchor),
             content.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+    }
+}
+
+enum PreviewContent: View {
+    case grid(PreviewGrid)
+    case failure(PreviewFailure)
+
+    var body: some View {
+        switch self {
+        case .grid(let grid): grid
+        case .failure(let failure): failure
+        }
     }
 }
