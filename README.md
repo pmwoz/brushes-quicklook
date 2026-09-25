@@ -104,7 +104,7 @@ icons, enable them under System Settings > General > Login Items & Extensions
 - **The host app imports the UTTypes.** Without it, `.abr`, `.brush` and
   `.brushset` resolve to dynamic UTIs and Quick Look never routes them to the
   extension. The exact declarations are in issue #1.
-- **Errors surface as text.** A file that cannot be previewed shows an error
+- **Errors show inside the preview.** A file that cannot be previewed shows an error
   view inside the preview with a plain message. For a damaged file the
   parser's text is under Details. No blank window, no crash.
 - **Previews are limited to 512 MB and 10 seconds.** Files above the size
