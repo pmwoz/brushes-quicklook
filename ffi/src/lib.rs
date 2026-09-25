@@ -45,13 +45,46 @@ fn c_string(value: String) -> CString {
 
 fn reason_text(reason: UnavailableReason) -> String {
     match reason {
-        UnavailableReason::NoShapePng => "no Shape.png".to_owned(),
-        UnavailableReason::UnsupportedTipKind(kind) => format!("unsupported tip kind: {kind}"),
+        UnavailableReason::NoShapePng => "This brush has no shape image.".to_owned(),
+        UnavailableReason::UnsupportedTipKind(kind) => match tip_kind_label(&kind) {
+            Some(label) => format!("Computed Photoshop tip ({label}). Not drawn yet."),
+            None => "Computed Photoshop tip. Not drawn yet.".to_owned(),
+        },
         UnavailableReason::Corrupt(message) => message,
         UnavailableReason::TooLarge { width, height } => {
-            format!("tip is {width}x{height} px, too large to preview")
+            format!("The shape image is {width} × {height} px, too large to preview.")
         }
     }
+}
+
+/// brushkit names the kind with a Debug variant name (`AirbrushTip`) or a
+/// lowercase literal (`shape tip`). Generic kinds get no label.
+fn tip_kind_label(kind: &str) -> Option<String> {
+    let mut words = Vec::new();
+    for part in kind.split_whitespace() {
+        let mut word = String::new();
+        for c in part.chars() {
+            if c.is_uppercase() && word.chars().last().is_some_and(|p| !p.is_uppercase()) {
+                words.push(std::mem::take(&mut word));
+            }
+            word.push(c);
+        }
+        words.push(word);
+    }
+    if words.last().is_some_and(|w| w == "Tip" || w == "tip") {
+        words.pop();
+    }
+    let label = words
+        .iter()
+        .map(|word| {
+            let mut chars = word.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!label.is_empty() && label != "Computed" && label != "Shape").then_some(label)
 }
 
 fn convert_entry(entry: PreviewEntry) -> Entry {
@@ -383,6 +416,55 @@ mod tests {
         assert_eq!(entry.source_dimensions, SourceDimensions::new(800, 600));
         assert!(entry.tip.is_none());
         assert!(entry.reason.unwrap().to_str().unwrap().contains("3 bytes"));
+    }
+
+    #[test]
+    fn reasons_read_as_plain_sentences() {
+        let computed = |kind: &str| UnavailableReason::UnsupportedTipKind(kind.to_owned());
+        for (reason, expected) in [
+            (
+                UnavailableReason::NoShapePng,
+                "This brush has no shape image.",
+            ),
+            (
+                computed("RoundPoint"),
+                "Computed Photoshop tip (Round Point). Not drawn yet.",
+            ),
+            (
+                computed("AirbrushTip"),
+                "Computed Photoshop tip (Airbrush). Not drawn yet.",
+            ),
+            (
+                computed("ErodibleFlat"),
+                "Computed Photoshop tip (Erodible Flat). Not drawn yet.",
+            ),
+            (
+                computed("bristle"),
+                "Computed Photoshop tip (Bristle). Not drawn yet.",
+            ),
+            (
+                computed("computed"),
+                "Computed Photoshop tip. Not drawn yet.",
+            ),
+            (
+                computed("shape tip"),
+                "Computed Photoshop tip. Not drawn yet.",
+            ),
+            (computed(""), "Computed Photoshop tip. Not drawn yet."),
+            (
+                UnavailableReason::TooLarge {
+                    width: 60000,
+                    height: 512,
+                },
+                "The shape image is 60000 × 512 px, too large to preview.",
+            ),
+            (
+                UnavailableReason::Corrupt("tip has zero area".to_owned()),
+                "tip has zero area",
+            ),
+        ] {
+            assert_eq!(reason_text(reason), expected);
+        }
     }
 
     #[test]
