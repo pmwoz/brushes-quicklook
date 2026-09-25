@@ -18,7 +18,7 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
             let result: Result<(BrushFormat, BrushPreviewSet), any Error> = await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     continuation.resume(returning: Result {
-                        (try BrushFormat(url: url), try BrushPreviewSet.load(url, maxCell: 256, timeout: timeout))
+                        (try BrushFormat(url: url), try Self.load(url, timeout: timeout))
                     })
                 }
             }
@@ -26,6 +26,13 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
                 PreviewGrid(fileName: url.lastPathComponent, format: format, set: set)
             })
         }
+    }
+
+    /// A single brush fills a 380 pt well, so it is decoded again at a size that stays sharp there.
+    private nonisolated static func load(_ url: URL, timeout: TimeInterval) throws -> BrushPreviewSet {
+        let set = try BrushPreviewSet.load(url, maxCell: 256, timeout: timeout)
+        guard set.entries.count == 1 else { return set }
+        return try BrushPreviewSet.load(url, maxCell: 768, timeout: timeout)
     }
 
     func beginPreview(completionHandler: @escaping (Error?) -> Void) -> UUID {
