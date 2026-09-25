@@ -10,9 +10,11 @@ brush tips with a format badge.
 
 ## What the thumbnail shows
 
-A 2×2 grid of the first four available tips with a format badge. Fewer than
-four tips or icons smaller than 64 points on either side show a single tip. Files with no
-available tips or a load error show only the card and badge.
+A 2×2 grid of the first four available tips with a format badge, blue for
+Photoshop and orange for Procreate. Fewer than four tips or icons smaller than
+64 points on either side show a single tip. Below 64 points a colour strip
+along the bottom edge replaces the badge. Files with no available tips show a
+brush glyph, and files that fail to load show a warning glyph.
 
 ## What the preview shows
 

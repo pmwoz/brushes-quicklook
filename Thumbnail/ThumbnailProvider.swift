@@ -5,7 +5,12 @@ final class ThumbnailProvider: QLThumbnailProvider {
         for request: QLFileThumbnailRequest,
         _ handler: @escaping (QLThumbnailReply?, Error?) -> Void
     ) {
-        let thumbnail = BrushThumbnail.load(request.fileURL, maximumSize: request.maximumSize, scale: request.scale)
+        let thumbnail: BrushThumbnail
+        do {
+            thumbnail = try BrushThumbnail.load(request.fileURL, maximumSize: request.maximumSize, scale: request.scale)
+        } catch {
+            return handler(nil, error)
+        }
         let side = min(request.maximumSize.width, request.maximumSize.height)
         let size = CGSize(width: side, height: side)
         let reply = QLThumbnailReply(contextSize: size, drawing: { context in
