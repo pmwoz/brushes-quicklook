@@ -16,14 +16,16 @@ available tips or a load error show only the card and badge.
 
 ## What the preview shows
 
-A grid of brush tip shapes.
+A grid of brush tip shapes that adds columns as the panel widens. A file with
+a single brush shows one large tip instead.
 
 - Name, tip bitmap and original raster dimensions when known. Computed tips
-  and unreadable raster headers show an unknown source size.
+  and unreadable raster headers show an unknown size.
 - Brushes in file order with a total count, including brushes that have no
   usable preview.
-- An explicit "preview unavailable" cell with the reason, never a silently
-  skipped brush.
+- A "No preview" cell that says why in plain words, never a silently skipped
+  brush.
+- Small tips are not enlarged past 2 points per source pixel.
 
 Not in scope: converting, editing or simulating strokes. This is a viewer.
 
