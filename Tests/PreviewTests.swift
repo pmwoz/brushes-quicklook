@@ -96,7 +96,7 @@ final class PreviewTests: XCTestCase {
         ])
         controller.finishPreview(current, result: .success(PreviewGrid(fileName: "current.brushset", format: .brushset, set: set)))
         controller.finishPreview(old, result: .success(PreviewGrid(fileName: "old.brush", format: .brush, set: BrushPreviewSet(name: "Stale", entries: []))))
-        controller.finishPreview(current, result: .failure(BrushPreviewError(message: "Late")))
+        controller.finishPreview(current, result: .failure(BrushPreviewError.damaged("Late")))
         XCTAssertEqual(newCompletions.count, 1)
         XCTAssertNil(newCompletions[0])
         XCTAssertEqual(oldCompletions.count, 1)
@@ -140,7 +140,7 @@ final class PreviewTests: XCTestCase {
         let controller = PreviewViewController()
         var completions: [Error?] = []
         let id = controller.beginPreview { completions.append($0) }
-        controller.finishPreview(id, result: .failure(BrushPreviewError(message: "Broken brush")))
+        controller.finishPreview(id, result: .failure(BrushPreviewError.damaged("Broken brush")))
         controller.finishPreview(id, result: .success(PreviewGrid(fileName: "bad.abr", format: .abr, set: BrushPreviewSet(name: nil, entries: []))))
         XCTAssertEqual(completions.count, 1)
         XCTAssertEqual((completions[0] as NSError?)?.userInfo[NSLocalizedDescriptionKey] as? String, "Broken brush")
