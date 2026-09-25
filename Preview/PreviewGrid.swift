@@ -93,24 +93,6 @@ struct PreviewGrid: View {
     }
 }
 
-private struct FormatStyle {
-    let badge: String
-    let name: String
-    let color: Color
-}
-
-extension BrushFormat {
-    fileprivate var style: FormatStyle {
-        let photoshop = Color(.sRGB, red: 0.184, green: 0.435, blue: 0.929)
-        let procreate = Color(.sRGB, red: 0.914, green: 0.412, blue: 0.173)
-        return switch self {
-        case .abr: FormatStyle(badge: "ABR", name: "Photoshop brushes", color: photoshop)
-        case .brush: FormatStyle(badge: "BRUSH", name: "Procreate brush", color: procreate)
-        case .brushset: FormatStyle(badge: "BRUSHSET", name: "Procreate brush set", color: procreate)
-        }
-    }
-}
-
 private struct FormatChip: View {
     let format: BrushFormat
 
@@ -120,7 +102,7 @@ private struct FormatChip: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(format.style.color, in: RoundedRectangle(cornerRadius: 5))
+            .background(Color(cgColor: format.style.color), in: RoundedRectangle(cornerRadius: 5))
     }
 }
 
