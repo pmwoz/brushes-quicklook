@@ -5,7 +5,7 @@ import SwiftUI
 final class PreviewViewController: NSViewController, @preconcurrency QLPreviewingController {
     private static let previewTimeout: TimeInterval = 10
     private var request: (id: UUID, completion: (Error?) -> Void)?
-    private(set) var preview: NSHostingView<PreviewGrid>?
+    private(set) var preview: NSHostingView<PreviewContent>?
 
     override func loadView() {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 760, height: 600))
@@ -15,15 +15,27 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
         let id = beginPreview(completionHandler: handler)
         Task {
             let timeout = Self.previewTimeout
-            let result: Result<BrushPreviewSet, any Error> = await withCheckedContinuation { continuation in
+            let result: Result<(BrushFormat, BrushPreviewSet), any Error> = await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     continuation.resume(returning: Result {
-                        try BrushPreviewSet.load(url, maxCell: 256, timeout: timeout)
+                        (try BrushFormat(url: url), try Self.load(url, timeout: timeout))
                     })
                 }
             }
-            finishPreview(id, result: result, fileName: url.lastPathComponent)
+            finishPreview(id, result: result.map { format, set in
+                PreviewGrid(fileName: url.lastPathComponent, format: format, set: set)
+            })
         }
+    }
+
+    /// A single brush fills a 380 pt well, so it is decoded again at a size that stays sharp there.
+    /// Both decodes share one timeout, and a failed sharper decode keeps the first result.
+    private nonisolated static func load(_ url: URL, timeout: TimeInterval) throws -> BrushPreviewSet {
+        let start = Date()
+        let set = try BrushPreviewSet.load(url, maxCell: 256, timeout: timeout)
+        let remaining = timeout - Date().timeIntervalSince(start)
+        guard set.entries.count == 1, remaining > 0 else { return set }
+        return (try? BrushPreviewSet.load(url, maxCell: 768, timeout: remaining)) ?? set
     }
 
     func beginPreview(completionHandler: @escaping (Error?) -> Void) -> UUID {
@@ -39,24 +51,18 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
         return id
     }
 
-    func finishPreview(_ id: UUID, result: Result<BrushPreviewSet, any Error>, fileName: String) {
+    func finishPreview(_ id: UUID, result: Result<PreviewGrid, any Error>) {
         guard let active = request, active.id == id else { return }
         request = nil
         view.subviews.forEach { $0.removeFromSuperview() }
-        switch result {
-        case .success(let set):
-            let hosted = NSHostingView(rootView: PreviewGrid(title: set.name ?? fileName, set: set))
-            preview = hosted
-            install(hosted)
-            active.completion(nil)
-        case .failure(let error):
-            // Quick Look shows a message only for an NSError carrying NSLocalizedDescriptionKey.
-            active.completion(NSError(
-                domain: Bundle.main.bundleIdentifier ?? "BrushesPreview",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]
-            ))
+        let content: PreviewContent = switch result {
+        case .success(let grid): .grid(grid)
+        case .failure(let error): .failure(PreviewFailure(error: error))
         }
+        let hosted = NSHostingView(rootView: content)
+        preview = hosted
+        install(hosted)
+        active.completion(nil)
     }
 
     private func install(_ content: NSView) {
@@ -68,5 +74,17 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
             content.topAnchor.constraint(equalTo: view.topAnchor),
             content.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+    }
+}
+
+enum PreviewContent: View {
+    case grid(PreviewGrid)
+    case failure(PreviewFailure)
+
+    var body: some View {
+        switch self {
+        case .grid(let grid): grid
+        case .failure(let failure): failure
+        }
     }
 }

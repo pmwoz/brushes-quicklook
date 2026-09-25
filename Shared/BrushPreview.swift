@@ -5,12 +5,12 @@ import os
 enum BrushFormat: Sendable {
     case abr, brush, brushset
 
-    init?(url: URL) {
+    init(url: URL) throws {
         switch url.pathExtension.lowercased() {
         case "abr": self = .abr
         case "brush": self = .brush
         case "brushset": self = .brushset
-        default: return nil
+        default: throw BrushPreviewError.unsupportedExtension(url.pathExtension)
         }
     }
 
@@ -51,9 +51,29 @@ enum BrushTip: Sendable {
     case unavailable(reason: String)
 }
 
-struct BrushPreviewError: LocalizedError, Sendable {
-    let message: String
-    var errorDescription: String? { message }
+enum BrushPreviewError: LocalizedError, Sendable {
+    case unsupportedExtension(String)
+    case tooLarge(size: Int, limit: Int)
+    case timedOut(TimeInterval)
+    /// Carries the parser's own message.
+    case damaged(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedExtension(let pathExtension):
+            "Unrecognised brush file extension: \(pathExtension)"
+        case .tooLarge(let size, let limit):
+            "This file is \(Self.bytes(size)). Files above \(Self.bytes(limit)) are not previewed."
+        case .timedOut(let timeout):
+            "Previewing took longer than \(timeout.formatted()) seconds."
+        case .damaged(let message):
+            message
+        }
+    }
+
+    private static func bytes(_ count: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .binary)
+    }
 }
 
 extension BrushPreviewSet {
@@ -63,14 +83,10 @@ extension BrushPreviewSet {
     /// Reads and parses `url` on a background queue. Throws when the file is not a brush
     /// file, is above `maxFileSize`, cannot be read, fails to parse, or takes longer than `timeout`.
     static func load(_ url: URL, maxCell: Int, firstAvailable: Int? = nil, timeout: TimeInterval) throws -> BrushPreviewSet {
-        guard let format = BrushFormat(url: url) else {
-            throw BrushPreviewError(message: "Unrecognised brush file extension: \(url.pathExtension)")
-        }
+        let format = try BrushFormat(url: url)
         let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
         if let fileSize, fileSize > maxFileSize {
-            let size = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .binary)
-            let limit = ByteCountFormatter.string(fromByteCount: Int64(maxFileSize), countStyle: .binary)
-            throw BrushPreviewError(message: "This file is \(size). Files above \(limit) are not previewed.")
+            throw BrushPreviewError.tooLarge(size: fileSize, limit: maxFileSize)
         }
 
         let result = OSAllocatedUnfairLock<Result<BrushPreviewSet, any Error>?>(initialState: nil)
@@ -82,7 +98,7 @@ extension BrushPreviewSet {
             semaphore.signal()
         }
         guard semaphore.wait(timeout: deadline) == .success else {
-            throw BrushPreviewError(message: "Previewing took longer than \(timeout.formatted()) seconds.")
+            throw BrushPreviewError.timedOut(timeout)
         }
         return try result.withLock { $0! }.get()
     }
@@ -99,7 +115,7 @@ extension BrushPreviewSet {
         }
         defer { bqk_string_free(error) }
         guard let set else {
-            throw BrushPreviewError(message: error.map { String(cString: $0) } ?? "Unable to preview this brush file.")
+            throw BrushPreviewError.damaged(error.map { String(cString: $0) } ?? "Unable to preview this brush file.")
         }
         defer { bqk_preview_set_free(set) }
 

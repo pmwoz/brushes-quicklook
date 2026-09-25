@@ -10,20 +10,24 @@ brush tips with a format badge.
 
 ## What the thumbnail shows
 
-A 2×2 grid of the first four available tips with a format badge. Fewer than
-four tips or icons smaller than 64 points on either side show a single tip. Files with no
-available tips or a load error show only the card and badge.
+A 2×2 grid of the first four available tips with a format badge, blue for
+Photoshop and orange for Procreate. Fewer than four tips or icons smaller than
+64 points on either side show a single tip. Below 64 points a colour strip
+along the bottom edge replaces the badge. Files with no available tips show a
+brush glyph, and files that fail to load show a warning glyph.
 
 ## What the preview shows
 
-A grid of brush tip shapes.
+A grid of brush tip shapes that adds columns as the panel widens. A file with
+a single brush shows one large tip instead.
 
 - Name, tip bitmap and original raster dimensions when known. Computed tips
-  and unreadable raster headers show an unknown source size.
+  and unreadable raster headers show an unknown size.
 - Brushes in file order with a total count, including brushes that have no
   usable preview.
-- An explicit "preview unavailable" cell with the reason, never a silently
-  skipped brush.
+- A "No preview" cell that says why in plain words, never a silently skipped
+  brush.
+- Small tips are not enlarged past 2 points per source pixel.
 
 Not in scope: converting, editing or simulating strokes. This is a viewer.
 
@@ -100,9 +104,9 @@ icons, enable them under System Settings > General > Login Items & Extensions
 - **The host app imports the UTTypes.** Without it, `.abr`, `.brush` and
   `.brushset` resolve to dynamic UTIs and Quick Look never routes them to the
   extension. The exact declarations are in issue #1.
-- **Errors surface as text.** When parsing fails, the extension hands the
-  library's message to Quick Look, which shows it above the generic file card.
-  No blank window, no crash.
+- **Errors show inside the preview.** A file that cannot be previewed shows an error
+  view inside the preview with a plain message. For a damaged file the
+  parser's text is under Details. No blank window, no crash.
 - **Previews are limited to 512 MB and 10 seconds.** Files above the size
   ceiling are refused before parsing. Reading into memory instead of mapping
   removes the SIGBUS path when a file shrinks while open. Timed-out work
