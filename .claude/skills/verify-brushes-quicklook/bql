@@ -151,13 +151,23 @@ def crash_reports():
     return {p.name: p for p in CRASH_DIR.iterdir() if p.name.startswith("Brushes")}
 
 
+def capture_time(report):
+    """The crash time from the report body. ReportCrash writes the file up to 17 s after the crash."""
+    try:
+        body = json.loads(report.read_text().split("\n", 1)[1])
+        return datetime.strptime(body["captureTime"], "%Y-%m-%d %H:%M:%S.%f %z").timestamp()
+    except (OSError, IndexError, KeyError, ValueError):
+        return None
+
+
 def new_crashes(before):
-    return [{"report": str(path), "process": re.split(r"[-_.]", name)[0], "time": path.stat().st_mtime}
+    return [{"report": str(path), "process": re.split(r"[-_.]", name)[0], "time": capture_time(path)}
             for name, path in sorted(crash_reports().items()) if name not in before]
 
 
 def readable(crashes):
-    return [{**crash, "time": datetime.fromtimestamp(crash["time"]).isoformat(timespec="seconds")} for crash in crashes]
+    return [{**crash, "time": crash["time"] and datetime.fromtimestamp(crash["time"]).isoformat(timespec="seconds")}
+            for crash in crashes]
 
 
 def windows():
@@ -474,10 +484,11 @@ def cmd_hostile(args):
                      "extension": preview["extension"],
                      "problems": [p for p in [None if thumbnail["png"] else "no thumbnail: " + thumbnail["qlmanage"],
                                               preview["problem"]] if p]})
-    time.sleep(3)  # ReportCrash writes the report a moment after the process dies.
+    note("waiting 30 s for crash reports")
+    time.sleep(30)  # A hosted runner writes each report 13 to 17 s after the crash.
     crashes = new_crashes(before)
     for crash in crashes:
-        earlier = [i for i, t in enumerate(started) if t <= crash["time"]]
+        earlier = [i for i, t in enumerate(started) if crash["time"] is not None and t <= crash["time"]]
         crash["likely_file"] = rows[earlier[-1]]["file"] if earlier else None
     unexercised = [row["file"] for row in rows if row["problems"]]
     finish(run_dir, {"ok": not crashes and not unexercised, "via": args.via, "files": len(rows),

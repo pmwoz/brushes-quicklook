@@ -39,3 +39,17 @@ jobs:
         run: xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesQuickLook -configuration Release ONLY_ACTIVE_ARCH=NO -derivedDataPath build.noindex build
       - name: Check Release app
         run: scripts/check-build.sh build.noindex/Build/Products/Release/BrushesQuickLook.app
+      - name: Install app
+        run: .claude/skills/verify-brushes-quicklook/bql install
+      - name: Copy fixtures
+        run: .claude/skills/verify-brushes-quicklook/bql fixtures
+      - name: Hostile sweep
+        run: .claude/skills/verify-brushes-quicklook/bql hostile
+      - name: Upload sweep evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hostile-evidence
+          path: |
+            build.noindex/verify/evidence
+            ~/Library/Logs/DiagnosticReports/Brushes*

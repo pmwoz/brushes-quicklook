@@ -94,7 +94,8 @@ Tests:
 `.claude/skills/verify-brushes-quicklook/bql` drives the installed extensions
 the way a user does. `bql hostile` renders the thumbnail and the preview of
 every corpus file, and of the files in `$BQL_REAL_FILES` when it is set. It
-fails on any new crash report. `bql --help` lists the other commands.
+fails on any new crash report. CI installs the Release build and runs the
+corpus sweep. `bql --help` lists the other commands.
 
 ```
 cargo test --manifest-path ffi/Cargo.toml
