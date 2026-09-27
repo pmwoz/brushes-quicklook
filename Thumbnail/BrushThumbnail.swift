@@ -1,4 +1,7 @@
 import AppKit
+import os
+
+private let logger = Logger(subsystem: "pl.esdesign.brushesquicklook", category: "thumbnail")
 
 struct BrushThumbnail {
     enum Layout {
@@ -64,9 +67,18 @@ struct BrushThumbnail {
         do {
             set = try BrushPreviewSet.load(url, maxCell: maxCell, firstAvailable: tipCount(for: maximumSize), timeout: 5)
         } catch {
-            return BrushThumbnail(format: format, layout: .empty(EmptyReason(loadError: error)), size: maximumSize)
+            let reason = EmptyReason(loadError: error)
+            // A file system error names the user's file, so only its domain and code are logged.
+            let detail = (error as? BrushPreviewError)?.localizedDescription
+                ?? "\((error as NSError).domain) \((error as NSError).code)"
+            logger.notice("Glyph \(String(describing: reason), privacy: .public): \(detail, privacy: .public)")
+            return BrushThumbnail(format: format, layout: .empty(reason), size: maximumSize)
         }
-        return BrushThumbnail(format: format, tips: set.entries.map(\.tip), size: maximumSize)
+        let thumbnail = BrushThumbnail(format: format, tips: set.entries.map(\.tip), size: maximumSize)
+        if case .empty = thumbnail.layout {
+            logger.notice("Glyph noTips: none of the \(set.entries.count) entries had a drawable tip")
+        }
+        return thumbnail
     }
 
     func draw(in context: CGContext, size: CGSize) {

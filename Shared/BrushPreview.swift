@@ -2,6 +2,9 @@ import Foundation
 import BrushkitFFI
 import os
 
+private let logger = Logger(subsystem: "pl.esdesign.brushesquicklook", category: "load")
+private let signposter = OSSignposter(logger: logger)
+
 enum BrushFormat: Sendable {
     case abr, brush, brushset
 
@@ -88,30 +91,41 @@ extension BrushPreviewSet {
         if let fileSize, fileSize > maxFileSize {
             throw BrushPreviewError.tooLarge(size: fileSize, limit: maxFileSize)
         }
+        let id = signposter.makeSignpostID()
+        let state = signposter.beginInterval(
+            "load", id: id,
+            "\(String(describing: format), privacy: .public) \(fileSize ?? 0) bytes, maxCell \(maxCell)"
+        )
+        defer { signposter.endInterval("load", state) }
 
         let result = OSAllocatedUnfairLock<Result<BrushPreviewSet, any Error>?>(initialState: nil)
         let semaphore = DispatchSemaphore(value: 0)
         let deadline = DispatchTime.now() + timeout
         DispatchQueue.global(qos: .userInitiated).async {
-            let parsed = Result { try read(url, format: format, maxCell: maxCell, firstAvailable: firstAvailable) }
+            let parsed = Result { try read(url, format: format, maxCell: maxCell, firstAvailable: firstAvailable, id: id) }
             result.withLock { $0 = parsed }
             semaphore.signal()
         }
         guard semaphore.wait(timeout: deadline) == .success else {
+            logger.error("Timed out after \(timeout, format: .fixed(precision: 1)) s: \(String(describing: format), privacy: .public) \(fileSize ?? 0) bytes")
             throw BrushPreviewError.timedOut(timeout)
         }
         return try result.withLock { $0! }.get()
     }
 
-    private static func read(_ url: URL, format: BrushFormat, maxCell: Int, firstAvailable: Int?) throws -> BrushPreviewSet {
-        let data = try Data(contentsOf: url)
+    private static func read(
+        _ url: URL, format: BrushFormat, maxCell: Int, firstAvailable: Int?, id: OSSignpostID
+    ) throws -> BrushPreviewSet {
+        let data = try signposter.withIntervalSignpost("read", id: id) { try Data(contentsOf: url) }
         var error: UnsafeMutablePointer<CChar>?
-        let set = data.withUnsafeBytes { bytes in
-            let base = bytes.bindMemory(to: UInt8.self).baseAddress
-            if let firstAvailable {
-                return bqk_preview_first_available(base, bytes.count, format.cValue, UInt32(maxCell), firstAvailable, &error)
+        let set = signposter.withIntervalSignpost("parse", id: id) {
+            data.withUnsafeBytes { bytes in
+                let base = bytes.bindMemory(to: UInt8.self).baseAddress
+                if let firstAvailable {
+                    return bqk_preview_first_available(base, bytes.count, format.cValue, UInt32(maxCell), firstAvailable, &error)
+                }
+                return bqk_preview(base, bytes.count, format.cValue, UInt32(maxCell), &error)
             }
-            return bqk_preview(base, bytes.count, format.cValue, UInt32(maxCell), &error)
         }
         defer { bqk_string_free(error) }
         guard let set else {
@@ -120,9 +134,11 @@ extension BrushPreviewSet {
         defer { bqk_preview_set_free(set) }
 
         let name = bqk_preview_set_name(set).map { String(cString: $0) }
-        let entries = (0..<bqk_preview_set_count(set)).map { index in
-            let entry = bqk_preview_set_entry(set, index)
-            return BrushEntry(copying: entry)
+        let entries = signposter.withIntervalSignpost("tips", id: id) {
+            (0..<bqk_preview_set_count(set)).map { index in
+                let entry = bqk_preview_set_entry(set, index)
+                return BrushEntry(copying: entry)
+            }
         }
         return BrushPreviewSet(name: name, entries: entries)
     }
