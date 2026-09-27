@@ -14,7 +14,9 @@ A 2×2 grid of the first four available tips with a format badge, blue for
 Photoshop and orange for Procreate. Fewer than four tips or icons smaller than
 64 points on either side show a single tip. Below 64 points a colour strip
 along the bottom edge replaces the badge. Files with no available tips show a
-brush glyph, and files that fail to load show a warning glyph.
+brush glyph. Files above 512 MB, or files that take longer than 5 seconds to
+load, also show a brush glyph because the thumbnail cannot tell whether they are
+damaged. Files that fail to load for any other reason show a warning glyph.
 
 ## What the preview shows
 

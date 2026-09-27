@@ -10,8 +10,12 @@ struct BrushThumbnail {
     enum EmptyReason {
         case noTips, notLoaded, unreadable
 
+        /// A file that is too large or too slow to load may still be a valid brush file.
         init(loadError: any Error) {
-            self = .unreadable
+            switch loadError {
+            case BrushPreviewError.tooLarge, BrushPreviewError.timedOut: self = .notLoaded
+            default: self = .unreadable
+            }
         }
     }
 
