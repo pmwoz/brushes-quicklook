@@ -53,6 +53,34 @@ final class PreviewTests: XCTestCase {
         }
     }
 
+    func testFileAboveTheCeilingIsRefusedWithoutReadingItAlsoThroughASymlink() throws {
+        let target = temporaryFile(extension: "abr")
+        XCTAssertTrue(FileManager.default.createFile(atPath: target.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: target)
+        try handle.truncate(atOffset: UInt64(LoadBudget.maxFileSize + 1))
+        try handle.close()
+        let link = temporaryFile(extension: "abr")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        defer { [link, target].forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        let peak = peakFootprint()
+        for url in [target, link] {
+            XCTAssertThrowsError(try BrushPreviewSet.load(url, budget: .all(cell: 8))) { error in
+                guard case let .tooLarge(size, _) = error as? BrushPreviewError else { return XCTFail("\(url.lastPathComponent): \(error)") }
+                XCTAssertEqual(size, LoadBudget.maxFileSize + 1)
+            }
+        }
+        XCTAssertLessThan(peakFootprint() - peak, 64 << 20, "The file above the ceiling was read into memory")
+    }
+
+    func testSymlinkToABrushLoadsItsTarget() throws {
+        let target = try copyFixture("root_brush")
+        let link = temporaryFile(extension: "brush")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        defer { [link, target].forEach { try? FileManager.default.removeItem(at: $0) } }
+        XCTAssertEqual(try BrushPreviewSet.load(link, budget: .all(cell: 8)).entries.map(\.name), ["A"])
+    }
+
     func testPartialSourcePairIsUnknown() {
         "Brush".withCString { name in
             let entry = bqk_entry(name: name, width: 0, height: 0, pixels: nil, unavailable_reason: nil, source_width: 320, source_height: 0)
@@ -194,11 +222,27 @@ final class PreviewTests: XCTestCase {
         XCTAssertEqual(PreviewGrid.countsText(brushes: 16, unavailable: 16), "16 brushes · none can be previewed yet")
     }
 
+    private func temporaryFile(extension fileExtension: String) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(fileExtension)
+    }
+
     private func copyFixture(_ name: String, extension fileExtension: String = "brush") throws -> URL {
         let source = try XCTUnwrap(Bundle(for: Self.self).url(forResource: name, withExtension: nil))
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(fileExtension)
+        let file = temporaryFile(extension: fileExtension)
         try FileManager.default.copyItem(at: source, to: file)
         return file
+    }
+
+    private func peakFootprint() -> Int {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        XCTAssertEqual(result, KERN_SUCCESS)
+        return Int(info.ledger_phys_footprint_peak)
     }
 
     private func loadFixture(_ name: String, budget: LoadBudget = .all(cell: 8)) throws -> BrushPreviewSet {

@@ -138,7 +138,7 @@ def brush_files(paths):
         if not path.exists():
             raise Fail(f"{path} does not exist", "Pass existing files or folders. Run `bql fixtures` for the corpus.")
         candidates = sorted(path.iterdir()) if path.is_dir() else [path]
-        files += [p.resolve() for p in candidates if p.is_file() and p.suffix[1:].lower() in BRUSH_EXTENSIONS]
+        files += [p.absolute() for p in candidates if p.is_file() and p.suffix[1:].lower() in BRUSH_EXTENSIONS]
     if not files:
         raise Fail(f"No .abr, .brush or .brushset files in {', '.join(map(str, paths))}",
                    "Quick Look routes files to the extensions by extension. Run `bql fixtures` for named copies.")
@@ -507,8 +507,10 @@ def cmd_logs(args):
             if key in begins:
                 end = ends.get(key)
                 ms[interval] = round((at(end) - at(begins[key])).total_seconds() * 1000, 2) if end else None
+        read = begins.get((pid, signpost_id, "read"), {}).get("eventMessage")
+        detail = ", ".join(filter(None, [begin["eventMessage"], read]))
         loads.append({"process": Path(begin.get("processImagePath", "")).name, "pid": pid,
-                      "time": begin["timestamp"], "detail": begin["eventMessage"], "ms": ms})
+                      "time": begin["timestamp"], "detail": detail, "ms": ms})
     loads.sort(key=lambda load: load["time"])
     messages = [{"time": e["timestamp"], "process": Path(e.get("processImagePath", "")).name,
                  "category": e.get("category"), "level": e.get("messageType"), "message": e["eventMessage"]}

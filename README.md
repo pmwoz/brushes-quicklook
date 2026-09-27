@@ -117,9 +117,11 @@ icons, enable them under System Settings > General > Login Items & Extensions
   view inside the preview with a plain message. For a damaged file the
   parser's text is under Details. No blank window, no crash.
 - **Previews are limited to 512 MB and 10 seconds.** Files above the size
-  ceiling are refused before parsing. Reading into memory instead of mapping
-  removes the SIGBUS path when a file shrinks while open. Timed-out work
-  finishes in the background and its result is discarded.
+  ceiling are refused before parsing. The ceiling is checked on the opened file
+  and on the bytes read, so a symlink or a file that grows cannot pass it.
+  Reading into memory instead of mapping removes the SIGBUS path when a file
+  shrinks while open. Timed-out work finishes in the background and its result
+  is discarded.
 
 ## License
 
