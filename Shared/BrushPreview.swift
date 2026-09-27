@@ -86,15 +86,8 @@ extension BrushPreviewSet {
     /// the first decode is returned.
     static func load(_ url: URL, budget: LoadBudget) throws -> BrushPreviewSet {
         let format = try BrushFormat(url: url)
-        let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
-        if let fileSize, fileSize > LoadBudget.maxFileSize {
-            throw BrushPreviewError.tooLarge(size: fileSize, limit: LoadBudget.maxFileSize)
-        }
         let id = signposter.makeSignpostID()
-        let state = signposter.beginInterval(
-            "load", id: id,
-            "\(String(describing: format), privacy: .public) \(fileSize ?? 0) bytes, maxCell \(budget.cell)"
-        )
+        let state = signposter.beginInterval("load", id: id, "\(String(describing: format), privacy: .public) maxCell \(budget.cell)")
         defer { signposter.endInterval("load", state) }
 
         let result = OSAllocatedUnfairLock<Result<BrushPreviewSet, any Error>?>(initialState: nil)
@@ -105,7 +98,7 @@ extension BrushPreviewSet {
             defer { semaphore.signal() }
             let data: Data
             do {
-                data = try signposter.withIntervalSignpost("read", id: id) { try Data(contentsOf: url) }
+                data = try readBounded(url, id: id)
             } catch {
                 result.withLock { $0 = .failure(error) }
                 return
@@ -129,10 +122,29 @@ extension BrushPreviewSet {
             if let first = result.withLock({ $0 }) {
                 return try first.get()
             }
-            logger.error("Timed out after \(seconds, format: .fixed(precision: 1)) s: \(String(describing: format), privacy: .public) \(fileSize ?? 0) bytes")
+            logger.error("Timed out after \(seconds, format: .fixed(precision: 1)) s: \(String(describing: format), privacy: .public)")
             throw BrushPreviewError.timedOut(budget.timeLimit)
         }
         return try result.withLock { $0! }.get()
+    }
+
+    /// Checks the ceiling on the opened file, which is the target of a symbolic link, and again on
+    /// the bytes read, so a file that grows after the check cannot pass it either.
+    private static func readBounded(_ url: URL, id: OSSignpostID) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let size = try handle.seekToEnd()
+        guard size <= LoadBudget.maxFileSize else {
+            throw BrushPreviewError.tooLarge(size: Int(clamping: size), limit: LoadBudget.maxFileSize)
+        }
+        try handle.seek(toOffset: 0)
+        let data = try signposter.withIntervalSignpost("read", id: id, "\(size) bytes") {
+            try handle.read(upToCount: LoadBudget.maxFileSize + 1) ?? Data()
+        }
+        guard data.count <= LoadBudget.maxFileSize else {
+            throw BrushPreviewError.tooLarge(size: data.count, limit: LoadBudget.maxFileSize)
+        }
+        return data
     }
 
     private static func decode(
