@@ -40,27 +40,53 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      - name: Control crash outside the extension
+        run: |
+          printf 'int main(void){ return *(volatile int *)0; }\n' > crashme.c
+          cc -o crashme crashme.c
+          ./crashme || echo "crashme exit $?"
+          for i in $(seq 1 60); do
+            ls ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports 2>/dev/null | grep -q crashme && break
+            sleep 1
+          done
+          echo "after ${i}s:"; ls -la ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports || true
+          defaults read com.apple.CrashReporter 2>&1 || true
+          launchctl print gui/$(id -u)/com.apple.ReportCrash 2>&1 | head -5 || true
       - run: rustup toolchain install --no-self-update
       - run: brew install xcodegen
       - run: $BQL install
       - run: $BQL fixtures
-      - name: Hostile sweep fails when the preview extension crashes
+      - name: Hostile sweep fails on a real extension crash
         run: |
-          (for i in $(seq 1 600); do
-             pid=$(pgrep -x BrushesPreview) && { sleep 0.5; kill -SEGV $pid; echo "drill: SIGSEGV to $pid" >&2; break; }
-             sleep 0.1
-           done) &
+          mkdir drill
+          cp build.noindex/verify/fixtures/corpus/ordered_set.brushset drill/crashdrill.brushset
           set +e
-          $BQL hostile build.noindex/verify/fixtures/corpus/ordered_set.brushset > drill.json
+          $BQL hostile drill > drill.json
           code=$?
           set -e
           cat drill.json
-          ls -la ~/Library/Logs/DiagnosticReports
           echo "hostile exit $code"
+          sleep 30
+          echo "after 30 s:"; ls -la ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports || true
           test "$code" -eq 1
           grep -Eq '"crashed": [1-9]' drill.json
+      - name: External SIGSEGV to the preview extension
+        if: always()
+        run: |
+          before=$(ls ~/Library/Logs/DiagnosticReports | wc -l)
+          qlmanage -p build.noindex/verify/fixtures/corpus/ordered_set.brushset >/dev/null 2>&1 & ql=$!
+          for i in $(seq 1 100); do pid=$(pgrep -x BrushesPreview) && break; sleep 0.2; done
+          sleep 2; kill -SEGV $pid; echo "SIGSEGV to $pid"
+          sleep 30; kill $ql || true
+          echo "reports before $before, after $(ls ~/Library/Logs/DiagnosticReports | wc -l)"
+          ls -la ~/Library/Logs/DiagnosticReports
+      - name: Crash reporter log
+        if: always()
+        run: log show --last 15m --style compact --predicate 'process == "ReportCrash" OR process == "osanalyticshelper" OR process == "diagnosticd"' | tail -40
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: drill-evidence
-          path: drill.json
+          path: |
+            drill.json
+            build.noindex/verify/evidence

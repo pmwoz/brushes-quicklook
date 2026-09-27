@@ -5,6 +5,7 @@ final class ThumbnailProvider: QLThumbnailProvider {
         for request: QLFileThumbnailRequest,
         _ handler: @escaping (QLThumbnailReply?, Error?) -> Void
     ) {
+        if request.fileURL.lastPathComponent.hasPrefix("crashdrill") { fatalError("crash drill") }
         let thumbnail: BrushThumbnail
         do {
             thumbnail = try BrushThumbnail.load(request.fileURL, maximumSize: request.maximumSize, scale: request.scale)

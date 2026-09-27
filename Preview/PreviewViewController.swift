@@ -11,6 +11,7 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
     }
 
     func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping (Error?) -> Void) {
+        if url.lastPathComponent.hasPrefix("crashdrill") { fatalError("crash drill") }
         let id = beginPreview(completionHandler: handler)
         Task {
             let result: Result<(BrushFormat, BrushPreviewSet), any Error> = await withCheckedContinuation { continuation in
