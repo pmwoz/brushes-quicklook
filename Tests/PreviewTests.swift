@@ -4,7 +4,7 @@ import XCTest
 
 final class PreviewTests: XCTestCase {
     func testBridgeCopiesOriginalDimensionsSeparatelyFromPixels() throws {
-        let set = try loadFixture("root_brush", maxCell: 8)
+        let set = try loadFixture("root_brush")
         XCTAssertEqual(set.entries.count, 1)
         let entry = try XCTUnwrap(set.entries.first)
         XCTAssertEqual(entry.name, "A")
@@ -30,11 +30,27 @@ final class PreviewTests: XCTestCase {
     func testFirstAvailableLimitsEntriesInSetOrder() throws {
         let file = try copyFixture("ordered_set", extension: "brushset")
         defer { try? FileManager.default.removeItem(at: file) }
-        let full = try BrushPreviewSet.load(file, maxCell: 8, timeout: 10)
+        let full = try BrushPreviewSet.load(file, budget: .all(cell: 8))
         XCTAssertEqual(full.entries.count, 2)
-        let first = try BrushPreviewSet.load(file, maxCell: 8, firstAvailable: 1, timeout: 10)
+        let first = try BrushPreviewSet.load(file, budget: LoadBudget(cell: 8, entries: .firstAvailable(1), timeLimit: .seconds(10)))
         XCTAssertEqual(first.entries.map(\.name), [full.entries[0].name])
         guard case .available = first.entries.first?.tip else { return XCTFail("Expected an available tip") }
+    }
+
+    func testOnlyAOneBrushFileIsDecodedAgainAtTheSingleBrushSize() throws {
+        let budget = LoadBudget.all(cell: 8, singleBrushCell: 12)
+        let single = try XCTUnwrap(loadFixture("root_brush", budget: budget).entries.first)
+        guard case let .available(width, height, _) = single.tip else { return XCTFail("Expected an available tip") }
+        XCTAssertEqual([width, height], [12, 6])
+
+        let file = try copyFixture("ordered_set", extension: "brushset")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let set = try BrushPreviewSet.load(file, budget: budget)
+        XCTAssertEqual(set.entries.count, 2)
+        for entry in set.entries {
+            guard case let .available(width, height, _) = entry.tip else { return XCTFail("Expected an available tip") }
+            XCTAssertEqual(max(width, height), 8)
+        }
     }
 
     func testPartialSourcePairIsUnknown() {
@@ -162,7 +178,7 @@ final class PreviewTests: XCTestCase {
         let tooLarge = PreviewFailure(error: BrushPreviewError.tooLarge(size: 600 << 20, limit: 512 << 20))
         XCTAssertEqual(tooLarge.message, "This file is 600 MB. Files above 512 MB are not previewed.")
         XCTAssertNil(tooLarge.details)
-        let timedOut = PreviewFailure(error: BrushPreviewError.timedOut(10))
+        let timedOut = PreviewFailure(error: BrushPreviewError.timedOut(.seconds(10)))
         XCTAssertEqual(timedOut.message, "Previewing took longer than 10 seconds.")
         XCTAssertNil(timedOut.details)
 
@@ -185,10 +201,16 @@ final class PreviewTests: XCTestCase {
         return file
     }
 
-    private func loadFixture(_ name: String, maxCell: Int = 8) throws -> BrushPreviewSet {
+    private func loadFixture(_ name: String, budget: LoadBudget = .all(cell: 8)) throws -> BrushPreviewSet {
         let file = try copyFixture(name)
         defer { try? FileManager.default.removeItem(at: file) }
-        return try BrushPreviewSet.load(file, maxCell: maxCell, timeout: 10)
+        return try BrushPreviewSet.load(file, budget: budget)
+    }
+}
+
+private extension LoadBudget {
+    static func all(cell: Int, singleBrushCell: Int? = nil) -> LoadBudget {
+        LoadBudget(cell: cell, entries: .all(singleBrushCell: singleBrushCell), timeLimit: .seconds(10))
     }
 }
 
