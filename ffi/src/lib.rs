@@ -55,7 +55,7 @@ fn reason_text(reason: UnavailableReason) -> String {
             format!("The shape image is {width} × {height} px, too large to preview.")
         }
         UnavailableReason::OverBudget => {
-            "The preview already holds as many tips as it can. This one is not shown.".to_owned()
+            "This file has too many brushes to preview them all.".to_owned()
         }
     }
 }
@@ -463,7 +463,7 @@ mod tests {
             ),
             (
                 UnavailableReason::OverBudget,
-                "The preview already holds as many tips as it can. This one is not shown.",
+                "This file has too many brushes to preview them all.",
             ),
             (
                 UnavailableReason::Corrupt("tip has zero area".to_owned()),
