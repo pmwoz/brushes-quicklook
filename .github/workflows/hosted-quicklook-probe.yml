@@ -1,0 +1,65 @@
+name: Hosted Quick Look probe
+
+on:
+  push:
+    branches: [prototype/hosted-quicklook-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install --no-self-update
+      - run: brew install xcodegen
+      - name: Session
+        run: |
+          sw_vers; xcodebuild -version; id
+          launchctl print gui/$(id -u) >/dev/null 2>&1 && echo "gui domain: yes" || echo "gui domain: no"
+          pgrep -lx WindowServer Finder Dock quicklookd QuickLookUIService || true
+          mkdir -p probe
+          screencapture -x probe/screen.png && echo "screencapture: ok" || echo "screencapture: failed"
+      - name: Install (build Release, lsregister, pluginkit)
+        continue-on-error: true
+        run: .claude/skills/verify-brushes-quicklook/bql install
+      - name: Doctor
+        continue-on-error: true
+        run: .claude/skills/verify-brushes-quicklook/bql doctor
+      - name: Probe extension load
+        continue-on-error: true
+        run: |
+          set -x
+          pluginkit -m -v -A -i pl.esdesign.brushesquicklook.thumbnail
+          pluginkit -m -v -A -i pl.esdesign.brushesquicklook.preview
+          .claude/skills/verify-brushes-quicklook/bql fixtures >/dev/null
+          f=build.noindex/verify/fixtures/corpus/wellformed_v6_patt.abr
+          start=$(date '+%Y-%m-%d %H:%M:%S')
+          qlmanage -x -t -s 256 -o probe "$f"
+          qlmanage -p "$f" >/dev/null 2>&1 & pid=$!
+          sleep 8
+          screencapture -x probe/screen-preview.png || true
+          kill $pid || true
+          sleep 2
+          log show --start "$start" --style compact \
+            --predicate 'process BEGINSWITH "Brushes" OR subsystem == "pl.esdesign.brushesquicklook"' > probe/log.txt
+          wc -l probe/log.txt; head -60 probe/log.txt
+          grep -q 'BrushesThumbnail' probe/log.txt && echo "VERDICT thumbnail extension ran" || echo "VERDICT thumbnail extension did not run"
+          grep -q 'beginning extension request' probe/log.txt && echo "VERDICT preview extension ran" || echo "VERDICT preview extension did not run"
+      - name: Hostile sweep
+        run: .claude/skills/verify-brushes-quicklook/bql hostile
+      - name: Collect crash reports
+        if: always()
+        run: |
+          mkdir -p probe/crashes
+          cp ~/Library/Logs/DiagnosticReports/Brushes* probe/crashes/ 2>/dev/null || true
+          ls -la ~/Library/Logs/DiagnosticReports || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: quicklook-evidence
+          path: |
+            probe
+            build.noindex/verify/evidence
