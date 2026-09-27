@@ -203,11 +203,11 @@ def log_since(start, predicate, signposts=False):
             if "eventMessage" in event]
 
 
-def extension_requests(start):
-    """BrushesPreview logs this line once per preview request, from Finder and qlmanage alike."""
-    events = log_since(start, 'process == "BrushesPreview" AND eventMessage == "beginning extension request"')
+def extension_requests(log):
+    """BrushesPreview logs this activity once per preview request, from Finder and qlmanage alike."""
+    events = [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
     return [(datetime.strptime(e["timestamp"], "%Y-%m-%d %H:%M:%S.%f%z").timestamp(),
-             {"pid": e.get("processID"), "binary": e.get("processImagePath")}) for e in events]
+             {"pid": e.get("processID"), "binary": e.get("processImagePath")}) for e in events if "eventMessage" in e]
 
 
 # Drivers. Each exercises one file through the real extension and returns what it saw.
@@ -295,14 +295,26 @@ DRIVERS = {"qlmanage": preview_with_qlmanage, "finder": preview_with_finder}
 
 
 def drive_previews(files, run_dir, settle, via):
-    start = datetime.now() - timedelta(seconds=1)
-    results = []
-    for file in files:
-        began = time.time()
-        result = DRIVERS[via](file, run_dir / "preview" / f"{file.name}.png", settle)
-        results.append((began, time.time(), result))
-    time.sleep(1)  # log ingestion lags the event
-    requests = extension_requests(start)
+    # On a hosted runner `log show` lost this activity for up to half of the previews. A live stream kept all of them.
+    log = run_dir / "preview-requests.ndjson"
+    size = log.stat().st_size if log.exists() else 0
+    with log.open("a") as out:
+        stream = subprocess.Popen(["/usr/bin/log", "stream", "--style", "ndjson", "--predicate",
+                                   'process == "BrushesPreview" AND eventMessage == "beginning extension request"'],
+                                  stdout=out, stderr=subprocess.DEVNULL)
+    try:
+        if not wait_for(lambda: log.stat().st_size > size, timeout=10):
+            raise Fail("`log stream` printed nothing within 10 s", "Run `log stream` by hand to see why it fails.")
+        results = []
+        for file in files:
+            began = time.time()
+            result = DRIVERS[via](file, run_dir / "preview" / f"{file.name}.png", settle)
+            results.append((began, time.time(), result))
+        time.sleep(1)  # the stream writes an event a moment after it happens
+    finally:
+        stream.terminate()
+        stream.wait()
+    requests = extension_requests(log)
     for began, ended, result in results:
         served = next((process for at, process in requests if began <= at <= ended), None)
         result["extension"] = served
