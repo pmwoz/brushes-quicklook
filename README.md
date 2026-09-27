@@ -16,7 +16,7 @@ Photoshop and orange for Procreate. Fewer than four tips or icons smaller than
 along the bottom edge replaces the badge. Tips are decoded at the icon's pixel
 size, up to 1024 px, so a 512 point icon on a Retina display stays sharp.
 Files with no available tips show a brush glyph. Files above 512 MB, or files
-that take longer than 5 seconds to load, also show a brush glyph because the
+with no tip loaded within 5 seconds, also show a brush glyph because the
 thumbnail cannot tell whether they are damaged. Files that fail to load for any other reason show a warning glyph.
 
 ## What the preview shows
@@ -30,6 +30,10 @@ a single brush shows one large tip instead.
   usable preview.
 - A "No preview" cell that says why in plain words, never a silently skipped
   brush.
+- A file that takes longer than 10 seconds shows the brushes loaded by then.
+  A line under the grid counts the brushes that were not loaded, and the
+  header counts them as brushes without preview. A file with no brush loaded
+  within 10 seconds shows an error.
 - Small tips are not enlarged past 2 points per source pixel.
 
 Not in scope: converting, editing or simulating strokes. This is a viewer.
@@ -55,7 +59,9 @@ supported and show as unavailable, and Procreate brushes without their own
 for one preview. That fits at least 4,096 tips at the preview's maximum tip
 size of 256 × 256 px, and more when tips are smaller. Once a tip does not fit,
 that brush and every later brush whose tip needs decoding get a "No preview"
-cell that reads "This file has too many brushes to preview them all."
+cell that reads "This file has too many brushes to preview them all." Large
+tips take longer to decode, so a file whose tips are larger than about
+2,048 px reaches the 10 second limit before this one.
 
 ## Building
 
@@ -120,8 +126,10 @@ icons, enable them under System Settings > General > Login Items & Extensions
   ceiling are refused before parsing. The ceiling is checked on the opened file
   and on the bytes read, so a symlink or a file that grows cannot pass it.
   Reading into memory instead of mapping removes the SIGBUS path when a file
-  shrinks while open. Timed-out work finishes in the background and its result
-  is discarded.
+  shrinks while open. The parser checks the time before each brush and stops
+  at the limit, so loading does not run on in the background. Work that runs
+  more than a second past the limit, such as one very large tip or a slow
+  disk, is abandoned and its result discarded.
 
 ## License
 

@@ -4,13 +4,13 @@
 )]
 
 use brushkit_preview::{
-    GrayscaleBitmap, PreviewEntry, PreviewOptions, SourceDimensions, TipPreview, UnavailableReason,
-    preview_abr, preview_abr_first_available, preview_brush, preview_brush_first_available,
-    preview_brushset, preview_brushset_first_available,
+    Format, GrayscaleBitmap, PreviewEntry, PreviewOptions, SourceDimensions, Take, TipPreview,
+    UnavailableReason,
 };
 use std::ffi::{CString, c_char, c_uint};
 use std::panic::catch_unwind;
 use std::ptr;
+use std::time::{Duration, Instant};
 
 pub const BQK_FORMAT_ABR: c_uint = 0;
 pub const BQK_FORMAT_BRUSH: c_uint = 1;
@@ -19,6 +19,7 @@ pub const BQK_FORMAT_BRUSHSET: c_uint = 2;
 pub struct PreviewSet {
     name: Option<CString>,
     entries: Vec<Entry>,
+    not_reached: usize,
 }
 
 struct Entry {
@@ -123,9 +124,20 @@ pub unsafe extern "C" fn bqk_preview(
     // A Rust enum would make unknown C discriminants undefined behaviour before validation.
     format: c_uint,
     max_cell: u32,
+    stop_after_ms: u32,
     error: *mut *mut c_char,
 ) -> *mut PreviewSet {
-    unsafe { preview(bytes, len, format, max_cell, None, error) }
+    unsafe {
+        preview(
+            bytes,
+            len,
+            format,
+            max_cell,
+            Take::All,
+            stop_after_ms,
+            error,
+        )
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -135,9 +147,11 @@ pub unsafe extern "C" fn bqk_preview_first_available(
     format: c_uint,
     max_cell: u32,
     count: usize,
+    stop_after_ms: u32,
     error: *mut *mut c_char,
 ) -> *mut PreviewSet {
-    unsafe { preview(bytes, len, format, max_cell, Some(count), error) }
+    let take = Take::FirstAvailable(count);
+    unsafe { preview(bytes, len, format, max_cell, take, stop_after_ms, error) }
 }
 
 unsafe fn preview(
@@ -145,9 +159,12 @@ unsafe fn preview(
     len: usize,
     format: c_uint,
     max_cell: u32,
-    first_available: Option<usize>,
+    take: Take,
+    stop_after_ms: u32,
     error: *mut *mut c_char,
 ) -> *mut PreviewSet {
+    // Taken first, so parsing the file's index counts against the time too.
+    let deadline = Instant::now() + Duration::from_millis(stop_after_ms.into());
     if !error.is_null() {
         unsafe { *error = ptr::null_mut() };
     }
@@ -160,21 +177,21 @@ unsafe fn preview(
         } else {
             unsafe { std::slice::from_raw_parts(bytes, len) }
         };
-        let opts = PreviewOptions { max_cell };
-        let set = match (format, first_available) {
-            (BQK_FORMAT_ABR, None) => preview_abr(bytes, opts),
-            (BQK_FORMAT_ABR, Some(n)) => preview_abr_first_available(bytes, opts, n),
-            (BQK_FORMAT_BRUSH, None) => preview_brush(bytes, opts),
-            (BQK_FORMAT_BRUSH, Some(n)) => preview_brush_first_available(bytes, opts, n),
-            (BQK_FORMAT_BRUSHSET, None) => preview_brushset(bytes, opts),
-            (BQK_FORMAT_BRUSHSET, Some(n)) => preview_brushset_first_available(bytes, opts, n),
+        let format = match format {
+            BQK_FORMAT_ABR => Format::Abr,
+            BQK_FORMAT_BRUSH => Format::Brush,
+            BQK_FORMAT_BRUSHSET => Format::Brushset,
             _ => return Err(format!("unknown brush format: {format}")),
-        }
-        .map_err(|e| e.to_string())?;
+        };
+        let opts = PreviewOptions { max_cell };
+        let set =
+            brushkit_preview::preview(bytes, format, opts, take, &mut || Instant::now() < deadline)
+                .map_err(|e| e.to_string())?;
         let entries = set.entries.into_iter().map(convert_entry).collect();
         Ok(Box::new(PreviewSet {
             name: set.set_name.map(c_string),
             entries,
+            not_reached: set.not_reached,
         }))
     })
     .unwrap_or_else(|_| Err("brush parser panicked".to_owned()));
@@ -201,6 +218,11 @@ pub unsafe extern "C" fn bqk_preview_set_name(set: *const PreviewSet) -> *const 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bqk_preview_set_count(set: *const PreviewSet) -> usize {
     unsafe { &*set }.entries.len()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bqk_preview_set_not_reached(set: *const PreviewSet) -> usize {
+    unsafe { &*set }.not_reached
 }
 
 #[unsafe(no_mangle)]
@@ -242,17 +264,28 @@ mod tests {
     use super::*;
     use std::ffi::CStr;
 
+    const NO_STOP: u32 = u32::MAX;
+
     unsafe fn call(
         bytes: &[u8],
         format: c_uint,
         count: Option<usize>,
+        stop_after_ms: u32,
         error: *mut *mut c_char,
     ) -> *mut PreviewSet {
         let (bytes, len) = (bytes.as_ptr(), bytes.len());
         unsafe {
             match count {
-                None => bqk_preview(bytes, len, format, 160, error),
-                Some(count) => bqk_preview_first_available(bytes, len, format, 160, count, error),
+                None => bqk_preview(bytes, len, format, 160, stop_after_ms, error),
+                Some(count) => bqk_preview_first_available(
+                    bytes,
+                    len,
+                    format,
+                    160,
+                    count,
+                    stop_after_ms,
+                    error,
+                ),
             }
         }
     }
@@ -285,7 +318,7 @@ mod tests {
         for count in [None, Some(1)] {
             let mut error = ptr::null_mut();
             unsafe {
-                let set = call(bytes, format, count, &mut error);
+                let set = call(bytes, format, count, NO_STOP, &mut error);
                 if set.is_null() {
                     assert!(!error.is_null());
                     let message = CStr::from_ptr(error).to_string_lossy().into_owned();
@@ -313,7 +346,7 @@ mod tests {
     fn copy_entries(bytes: &[u8], format: c_uint, count: Option<usize>) -> Option<Vec<Copied>> {
         let mut error = ptr::null_mut();
         unsafe {
-            let set = call(bytes, format, count, &mut error);
+            let set = call(bytes, format, count, NO_STOP, &mut error);
             if set.is_null() {
                 bqk_string_free(error);
                 return None;
@@ -343,7 +376,7 @@ mod tests {
         for format in [BQK_FORMAT_ABR, BQK_FORMAT_BRUSH, BQK_FORMAT_BRUSHSET] {
             let mut error = ptr::null_mut();
             unsafe {
-                let set = bqk_preview(ptr::null(), 0, format, 160, &mut error);
+                let set = bqk_preview(ptr::null(), 0, format, 160, NO_STOP, &mut error);
                 assert!(set.is_null());
                 assert!(!error.is_null());
                 assert!(!CStr::from_ptr(error).to_bytes().is_empty());
@@ -401,6 +434,41 @@ mod tests {
                 });
                 assert_eq!(first, expected, "{} with count {count}", path.display());
             }
+        }
+    }
+
+    unsafe fn counts(bytes: &[u8], format: c_uint, stop_after_ms: u32) -> Option<(usize, usize)> {
+        let mut error = ptr::null_mut();
+        unsafe {
+            let set = call(bytes, format, None, stop_after_ms, &mut error);
+            if set.is_null() {
+                bqk_string_free(error);
+                return None;
+            }
+            let counts = (bqk_preview_set_count(set), bqk_preview_set_not_reached(set));
+            bqk_preview_set_free(set);
+            Some(counts)
+        }
+    }
+
+    #[test]
+    fn an_elapsed_time_limit_builds_no_entry_and_counts_every_one() {
+        for (path, format) in corpus() {
+            let bytes = std::fs::read(&path).unwrap();
+            let (full, stopped) =
+                unsafe { (counts(&bytes, format, NO_STOP), counts(&bytes, format, 0)) };
+            assert_eq!(
+                full.map(|(_, not_reached)| not_reached),
+                full.map(|_| 0),
+                "{}",
+                path.display()
+            );
+            assert_eq!(
+                stopped,
+                full.map(|(count, _)| (0, count)),
+                "{}",
+                path.display()
+            );
         }
     }
 
@@ -477,10 +545,18 @@ mod tests {
     #[test]
     fn minimal_abr_matches_preview_count() {
         let bytes = include_bytes!("../tests/fixtures/wellformed_v6_min");
-        let expected = preview_abr(bytes, PreviewOptions { max_cell: 160 }).unwrap();
+        let expected =
+            brushkit_preview::preview_abr(bytes, PreviewOptions { max_cell: 160 }).unwrap();
         let mut error = ptr::null_mut();
         unsafe {
-            let set = bqk_preview(bytes.as_ptr(), bytes.len(), BQK_FORMAT_ABR, 160, &mut error);
+            let set = bqk_preview(
+                bytes.as_ptr(),
+                bytes.len(),
+                BQK_FORMAT_ABR,
+                160,
+                NO_STOP,
+                &mut error,
+            );
             assert!(!set.is_null());
             assert!(error.is_null());
             assert_eq!(bqk_preview_set_count(set), expected.entries.len());
@@ -508,7 +584,14 @@ mod tests {
         for format in [BQK_FORMAT_ABR, BQK_FORMAT_BRUSH, BQK_FORMAT_BRUSHSET] {
             let mut error = ptr::null_mut();
             unsafe {
-                let set = bqk_preview(bytes.as_ptr(), bytes.len(), format, 160, &mut error);
+                let set = bqk_preview(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    format,
+                    160,
+                    NO_STOP,
+                    &mut error,
+                );
                 assert!(set.is_null());
                 assert!(!error.is_null());
                 assert!(!CStr::from_ptr(error).to_bytes().is_empty());
@@ -521,7 +604,7 @@ mod tests {
     fn unknown_format_returns_an_error() {
         let mut error = ptr::null_mut();
         unsafe {
-            let set = bqk_preview(ptr::null(), 0, c_uint::MAX, 160, &mut error);
+            let set = bqk_preview(ptr::null(), 0, c_uint::MAX, 160, NO_STOP, &mut error);
             assert!(set.is_null());
             assert!(!error.is_null());
             assert!(

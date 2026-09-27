@@ -6,12 +6,14 @@ struct PreviewGrid: View {
     let format: BrushFormat
     let setName: String?
     let cells: [BrushPreviewCell]
+    let notReached: Int
 
     init(fileName: String, format: BrushFormat, set: BrushPreviewSet) {
         self.fileName = fileName
         self.format = format
         setName = set.name
         cells = set.entries.map(BrushPreviewCell.init)
+        notReached = set.notReached
     }
 
     nonisolated static func countsText(brushes: Int, unavailable: Int) -> String {
@@ -21,9 +23,15 @@ struct PreviewGrid: View {
         return "\(total) · \(unavailable) without preview"
     }
 
+    nonisolated static func notReachedText(_ count: Int) -> String {
+        let seconds = (LoadBudget.preview.timeLimit / .seconds(1)).formatted()
+        let brushes = count == 1 ? "brush was" : "brushes were"
+        return "\(count) more \(brushes) not loaded. Previews stop loading after \(seconds) seconds."
+    }
+
     var body: some View {
         Group {
-            if cells.count == 1, let cell = cells.first {
+            if cells.count == 1, notReached == 0, let cell = cells.first {
                 single(cell)
             } else {
                 grid
@@ -36,7 +44,10 @@ struct PreviewGrid: View {
 
     private var grid: some View {
         let named = setName.map { $0 != (fileName as NSString).deletingPathExtension } ?? false
-        let counts = Self.countsText(brushes: cells.count, unavailable: cells.filter { $0.image == nil }.count)
+        let counts = Self.countsText(
+            brushes: cells.count + notReached,
+            unavailable: cells.filter { $0.image == nil }.count + notReached
+        )
         let title = named ? setName ?? fileName : counts
         let subtitle = named ? "\(counts) · \(format.style.name)" : format.style.name
         return VStack(alignment: .leading, spacing: 0) {
@@ -62,6 +73,13 @@ struct PreviewGrid: View {
                     }
                 }
                 .padding(20)
+                if notReached > 0 {
+                    Text(Self.notReachedText(notReached))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding([.horizontal, .bottom], 20)
+                }
             }
         }
     }
