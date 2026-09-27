@@ -45,11 +45,12 @@ jobs:
         run: .claude/skills/verify-brushes-quicklook/bql fixtures
       - name: Hostile sweep
         run: .claude/skills/verify-brushes-quicklook/bql hostile
+      - name: Copy crash reports
+        if: always()
+        run: mkdir -p build.noindex/verify/evidence/crash-reports && cp ~/Library/Logs/DiagnosticReports/Brushes* build.noindex/verify/evidence/crash-reports/ 2>/dev/null || true
       - name: Upload sweep evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: hostile-evidence
-          path: |
-            build.noindex/verify/evidence
-            ~/Library/Logs/DiagnosticReports/Brushes*
+          path: build.noindex/verify/evidence

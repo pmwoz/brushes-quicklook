@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+from bisect import bisect_right
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -152,7 +153,7 @@ def crash_reports():
 
 
 def capture_time(report):
-    """The crash time from the report body. ReportCrash writes the file up to 17 s after the crash."""
+    """ReportCrash writes the file seconds, sometimes hours, after the crash."""
     try:
         body = json.loads(report.read_text().split("\n", 1)[1])
         return datetime.strptime(body["captureTime"], "%Y-%m-%d %H:%M:%S.%f %z").timestamp()
@@ -484,12 +485,18 @@ def cmd_hostile(args):
                      "extension": preview["extension"],
                      "problems": [p for p in [None if thumbnail["png"] else "no thumbnail: " + thumbnail["qlmanage"],
                                               preview["problem"]] if p]})
-    note("waiting 30 s for crash reports")
-    time.sleep(30)  # A hosted runner writes each report 13 to 17 s after the crash.
-    crashes = new_crashes(before)
+    # A hosted runner wrote reports up to 25 s after the crash, so wait until none has arrived for 30 s.
+    note("waiting for crash reports")
+    reports, quiet_since = crash_reports(), time.time()
+    while time.time() - quiet_since < 30:
+        time.sleep(1)
+        latest = crash_reports()
+        if latest.keys() != reports.keys():
+            reports, quiet_since = latest, time.time()
+    crashes = [crash for crash in new_crashes(before) if crash["time"] is None or crash["time"] >= started[0]]
     for crash in crashes:
-        earlier = [i for i, t in enumerate(started) if crash["time"] is not None and t <= crash["time"]]
-        crash["likely_file"] = rows[earlier[-1]]["file"] if earlier else None
+        i = bisect_right(started, crash["time"]) if crash["time"] is not None else 0
+        crash["likely_file"] = rows[i - 1]["file"] if i else None
     unexercised = [row["file"] for row in rows if row["problems"]]
     finish(run_dir, {"ok": not crashes and not unexercised, "via": args.via, "files": len(rows),
                      "crashed": len(crashes), "unexercised": unexercised,
