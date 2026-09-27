@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+from bisect import bisect_right
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -151,13 +152,23 @@ def crash_reports():
     return {p.name: p for p in CRASH_DIR.iterdir() if p.name.startswith("Brushes")}
 
 
+def capture_time(report):
+    """ReportCrash writes the file seconds, sometimes hours, after the crash."""
+    try:
+        body = json.loads(report.read_text().split("\n", 1)[1])
+        return datetime.strptime(body["captureTime"], "%Y-%m-%d %H:%M:%S.%f %z").timestamp()
+    except (OSError, IndexError, KeyError, ValueError):
+        return None
+
+
 def new_crashes(before):
-    return [{"report": str(path), "process": re.split(r"[-_.]", name)[0], "time": path.stat().st_mtime}
+    return [{"report": str(path), "process": re.split(r"[-_.]", name)[0], "time": capture_time(path)}
             for name, path in sorted(crash_reports().items()) if name not in before]
 
 
 def readable(crashes):
-    return [{**crash, "time": datetime.fromtimestamp(crash["time"]).isoformat(timespec="seconds")} for crash in crashes]
+    return [{**crash, "time": crash["time"] and datetime.fromtimestamp(crash["time"]).isoformat(timespec="seconds")}
+            for crash in crashes]
 
 
 def windows():
@@ -474,11 +485,18 @@ def cmd_hostile(args):
                      "extension": preview["extension"],
                      "problems": [p for p in [None if thumbnail["png"] else "no thumbnail: " + thumbnail["qlmanage"],
                                               preview["problem"]] if p]})
-    time.sleep(3)  # ReportCrash writes the report a moment after the process dies.
-    crashes = new_crashes(before)
+    # A hosted runner wrote reports up to 25 s after the crash, so wait until none has arrived for 30 s.
+    note("waiting for crash reports")
+    reports, quiet_since = crash_reports(), time.time()
+    while time.time() - quiet_since < 30:
+        time.sleep(1)
+        latest = crash_reports()
+        if latest.keys() != reports.keys():
+            reports, quiet_since = latest, time.time()
+    crashes = [crash for crash in new_crashes(before) if crash["time"] is None or crash["time"] >= started[0]]
     for crash in crashes:
-        earlier = [i for i, t in enumerate(started) if t <= crash["time"]]
-        crash["likely_file"] = rows[earlier[-1]]["file"] if earlier else None
+        i = bisect_right(started, crash["time"]) if crash["time"] is not None else 0
+        crash["likely_file"] = rows[i - 1]["file"] if i else None
     unexercised = [row["file"] for row in rows if row["problems"]]
     finish(run_dir, {"ok": not crashes and not unexercised, "via": args.via, "files": len(rows),
                      "crashed": len(crashes), "unexercised": unexercised,

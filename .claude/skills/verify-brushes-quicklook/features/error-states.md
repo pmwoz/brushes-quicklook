@@ -52,7 +52,9 @@ Preconditions:
   covered by `PreviewTests`, not here.
 - The time-out state ("Previewing took longer than 10 seconds.") has no fixture.
   It needs a real file that parses for longer than 10 s.
-- Crash reports can take a second or two to appear. `hostile` waits 3 s at the
-  end. `likely_file` is the last file that started before the report was
-  written, so confirm it by rerunning `bql hostile <that file>`.
-- A report from before the run does not count. Only new `Brushes*` reports fail the sweep.
+- ReportCrash can write a report 25 s after the crash. `hostile` waits at the
+  end until no new report has arrived for 30 s, then collects every new report.
+  `likely_file` is the last file that started before the `captureTime` in the
+  report, so confirm it by rerunning `bql hostile <that file>`.
+- A crash from before the run does not count, even when its report arrives
+  during the run. Only new `Brushes*` reports fail the sweep.
