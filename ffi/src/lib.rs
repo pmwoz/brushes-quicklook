@@ -54,6 +54,9 @@ fn reason_text(reason: UnavailableReason) -> String {
         UnavailableReason::TooLarge { width, height } => {
             format!("The shape image is {width} × {height} px, too large to preview.")
         }
+        UnavailableReason::OverBudget => {
+            "The preview already holds as many tips as it can. This one is not shown.".to_owned()
+        }
     }
 }
 
@@ -457,6 +460,10 @@ mod tests {
                     height: 512,
                 },
                 "The shape image is 60000 × 512 px, too large to preview.",
+            ),
+            (
+                UnavailableReason::OverBudget,
+                "The preview already holds as many tips as it can. This one is not shown.",
             ),
             (
                 UnavailableReason::Corrupt("tip has zero area".to_owned()),
