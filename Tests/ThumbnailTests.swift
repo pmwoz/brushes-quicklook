@@ -84,6 +84,30 @@ final class ThumbnailTests: XCTestCase {
         }
     }
 
+    func testFileAboveTheSizeLimitShowsNotLoadedState() throws {
+        let file = temporaryFile(extension: "abr")
+        XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: nil))
+        defer { try? FileManager.default.removeItem(at: file) }
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: UInt64(BrushPreviewSet.maxFileSize + 1))
+        try handle.close()
+
+        let thumbnail = try BrushThumbnail.load(file, maximumSize: size, scale: 2)
+        guard case .empty(.notLoaded) = thumbnail.layout else { return XCTFail("Expected the not-loaded state, got \(thumbnail.layout)") }
+    }
+
+    func testOnlyTooLargeAndTimedOutLoadErrorsShowNotLoadedState() {
+        let cases: [(any Error, BrushThumbnail.EmptyReason)] = [
+            (BrushPreviewError.timedOut(5), .notLoaded),
+            (BrushPreviewError.tooLarge(size: 600 << 20, limit: 512 << 20), .notLoaded),
+            (BrushPreviewError.damaged("malformed block"), .unreadable),
+            (CocoaError(.fileReadNoSuchFile), .unreadable),
+        ]
+        for (error, expected) in cases {
+            XCTAssertEqual(BrushThumbnail.EmptyReason(loadError: error), expected, "\(error)")
+        }
+    }
+
     func testPillIsFilledWithTheFormatColourAt128Points() throws {
         for (format, expected) in [(BrushFormat.abr, [47, 111, 237, 255]), (.brushset, [233, 105, 44, 255])] {
             let context = try draw(BrushThumbnail(format: format, tips: [], size: size), pixels: 128)
