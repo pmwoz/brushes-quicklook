@@ -84,6 +84,35 @@ final class ThumbnailTests: XCTestCase {
         }
     }
 
+    func testFileAboveTheSizeLimitShowsNotLoadedState() throws {
+        let file = temporaryFile(extension: "abr")
+        XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: nil))
+        defer { try? FileManager.default.removeItem(at: file) }
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: UInt64(BrushPreviewSet.maxFileSize + 1))
+        try handle.close()
+
+        let thumbnail = try BrushThumbnail.load(file, maximumSize: size, scale: 2)
+        guard case .empty(.notLoaded) = thumbnail.layout else { return XCTFail("Expected the not-loaded state, got \(thumbnail.layout)") }
+        let unreadable = try BrushThumbnail.load(temporaryFile(extension: "abr"), maximumSize: size, scale: 2)
+        let drawn = try bitmap(draw(thumbnail, pixels: 128))
+        XCTAssertEqual(drawn, try bitmap(draw(BrushThumbnail(format: .abr, tips: [], size: size), pixels: 128)),
+                       "Draws the brush glyph and badge of the no-tips state")
+        XCTAssertNotEqual(drawn, try bitmap(draw(unreadable, pixels: 128)), "Does not draw the warning glyph")
+    }
+
+    func testOnlyTooLargeAndTimedOutLoadErrorsShowNotLoadedState() {
+        let cases: [(any Error, BrushThumbnail.EmptyReason)] = [
+            (BrushPreviewError.timedOut(5), .notLoaded),
+            (BrushPreviewError.tooLarge(size: 600 << 20, limit: 512 << 20), .notLoaded),
+            (BrushPreviewError.damaged("malformed block"), .unreadable),
+            (CocoaError(.fileReadNoSuchFile), .unreadable),
+        ]
+        for (error, expected) in cases {
+            XCTAssertEqual(BrushThumbnail.EmptyReason(loadError: error), expected, "\(error)")
+        }
+    }
+
     func testPillIsFilledWithTheFormatColourAt128Points() throws {
         for (format, expected) in [(BrushFormat.abr, [47, 111, 237, 255]), (.brushset, [233, 105, 44, 255])] {
             let context = try draw(BrushThumbnail(format: format, tips: [], size: size), pixels: 128)
@@ -160,6 +189,10 @@ final class ThumbnailTests: XCTestCase {
         ))
         thumbnail.draw(in: context, size: CGSize(width: side, height: side))
         return context
+    }
+
+    private func bitmap(_ context: CGContext) throws -> Data {
+        Data(bytes: try XCTUnwrap(context.data), count: context.bytesPerRow * context.height)
     }
 
     private func pixel(_ context: CGContext, x: Int, y: Int) throws -> [UInt8] {

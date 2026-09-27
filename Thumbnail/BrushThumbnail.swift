@@ -8,7 +8,15 @@ struct BrushThumbnail {
     }
 
     enum EmptyReason {
-        case noTips, unreadable
+        case noTips, notLoaded, unreadable
+
+        /// A file that is too large or too slow to load may still be a valid brush file.
+        init(loadError: any Error) {
+            switch loadError as? BrushPreviewError {
+            case .tooLarge, .timedOut: self = .notLoaded
+            case .damaged, .unsupportedExtension, nil: self = .unreadable
+            }
+        }
     }
 
     enum Badge {
@@ -47,13 +55,16 @@ struct BrushThumbnail {
         self.layout = layout
     }
 
-    /// Throws only for an extension that is not a brush format. Load errors become the unreadable state.
+    /// Throws only for an extension that is not a brush format. Load errors become an empty state.
     static func load(_ url: URL, maximumSize: CGSize, scale: CGFloat) throws -> BrushThumbnail {
         let format = try BrushFormat(url: url)
         let pixels = (max(maximumSize.width, maximumSize.height) * scale).rounded(.up)
         let maxCell = Int(min(max(pixels, 1), 256))
-        guard let set = try? BrushPreviewSet.load(url, maxCell: maxCell, firstAvailable: tipCount(for: maximumSize), timeout: 5) else {
-            return BrushThumbnail(format: format, layout: .empty(.unreadable), size: maximumSize)
+        let set: BrushPreviewSet
+        do {
+            set = try BrushPreviewSet.load(url, maxCell: maxCell, firstAvailable: tipCount(for: maximumSize), timeout: 5)
+        } catch {
+            return BrushThumbnail(format: format, layout: .empty(EmptyReason(loadError: error)), size: maximumSize)
         }
         return BrushThumbnail(format: format, tips: set.entries.map(\.tip), size: maximumSize)
     }
@@ -94,7 +105,7 @@ struct BrushThumbnail {
         switch layout {
         case let .empty(reason):
             let symbol = switch reason {
-            case .noTips: "paintbrush.pointed"
+            case .noTips, .notLoaded: "paintbrush.pointed"
             case .unreadable: "exclamationmark.triangle"
             }
             let glyph = side * 0.38
