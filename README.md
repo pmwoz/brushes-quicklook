@@ -48,7 +48,11 @@ Format parsing lives in `brushkit`. Parsing bugs go there.
 
 Known limits inherited from the parser: some Photoshop tip kinds are not yet
 supported and show as unavailable, and Procreate brushes without their own
-`Shape.png` have no preview.
+`Shape.png` have no preview. The parser returns at most 256 MiB of tip bitmaps
+for one preview. That fits at least 4,096 tips at the preview's maximum tip
+size of 256 × 256 px, and more when tips are smaller. A brush whose tip does
+not fit gets a "No preview" cell that reads "This file has too many brushes to
+preview them all."
 
 ## Building
 
