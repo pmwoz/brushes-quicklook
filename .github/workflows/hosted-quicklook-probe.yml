@@ -68,8 +68,8 @@ jobs:
           echo "hostile exit $code"
           sleep 30
           echo "after 30 s:"; ls -la ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports || true
-          test "$code" -eq 1
           grep -Eq '"crashed": [1-9]' drill.json
+          test "$code" -eq 1
       - name: External SIGSEGV to the preview extension
         if: always()
         run: |
@@ -90,3 +90,4 @@ jobs:
           path: |
             drill.json
             build.noindex/verify/evidence
+            ~/Library/Logs/DiagnosticReports/Brushes*

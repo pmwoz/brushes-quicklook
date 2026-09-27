@@ -474,8 +474,7 @@ def cmd_hostile(args):
                      "extension": preview["extension"],
                      "problems": [p for p in [None if thumbnail["png"] else "no thumbnail: " + thumbnail["qlmanage"],
                                               preview["problem"]] if p]})
-    time.sleep(3)  # ReportCrash writes the report a moment after the process dies.
-    crashes = new_crashes(before)
+    crashes = wait_for(lambda: new_crashes(before), timeout=30) or []
     for crash in crashes:
         earlier = [i for i, t in enumerate(started) if t <= crash["time"]]
         crash["likely_file"] = rows[earlier[-1]]["file"] if earlier else None
