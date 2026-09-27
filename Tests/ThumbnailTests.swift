@@ -34,6 +34,13 @@ final class ThumbnailTests: XCTestCase {
         XCTAssertEqual(BrushThumbnail.tipCount(for: CGSize(width: 64, height: 64)), 4)
     }
 
+    func testTipsAreDecodedAtTheRequestedPixelSizeUpTo1024() {
+        for (points, expected) in [(512, 1024), (128, 256), (16, 32), (1024, 1024)] {
+            let size = CGSize(width: points, height: points)
+            XCTAssertEqual(LoadBudget.thumbnail(maximumSize: size, scale: 2, tips: 4).cell, expected, "\(points) pt at 2x")
+        }
+    }
+
     func testGridUsesFirstFourUsableTipsInOrderAt64Points() throws {
         let tips = [unavailable, tip(1), tip(2), unavailable,
                     .available(width: 0, height: 1, pixels: Data()), tip(3), tip(4), tip(5)]
@@ -89,7 +96,7 @@ final class ThumbnailTests: XCTestCase {
         XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: nil))
         defer { try? FileManager.default.removeItem(at: file) }
         let handle = try FileHandle(forWritingTo: file)
-        try handle.truncate(atOffset: UInt64(BrushPreviewSet.maxFileSize + 1))
+        try handle.truncate(atOffset: UInt64(LoadBudget.maxFileSize + 1))
         try handle.close()
 
         let thumbnail = try BrushThumbnail.load(file, maximumSize: size, scale: 2)
@@ -103,7 +110,7 @@ final class ThumbnailTests: XCTestCase {
 
     func testOnlyTooLargeAndTimedOutLoadErrorsShowNotLoadedState() {
         let cases: [(any Error, BrushThumbnail.EmptyReason)] = [
-            (BrushPreviewError.timedOut(5), .notLoaded),
+            (BrushPreviewError.timedOut(.seconds(5)), .notLoaded),
             (BrushPreviewError.tooLarge(size: 600 << 20, limit: 512 << 20), .notLoaded),
             (BrushPreviewError.damaged("malformed block"), .unreadable),
             (CocoaError(.fileReadNoSuchFile), .unreadable),

@@ -57,7 +57,7 @@ enum BrushTip: Sendable {
 enum BrushPreviewError: LocalizedError, Sendable {
     case unsupportedExtension(String)
     case tooLarge(size: Int, limit: Int)
-    case timedOut(TimeInterval)
+    case timedOut(Duration)
     /// Carries the parser's own message.
     case damaged(String)
 
@@ -67,8 +67,8 @@ enum BrushPreviewError: LocalizedError, Sendable {
             "Unrecognised brush file extension: \(pathExtension)"
         case .tooLarge(let size, let limit):
             "This file is \(Self.bytes(size)). Files above \(Self.bytes(limit)) are not previewed."
-        case .timedOut(let timeout):
-            "Previewing took longer than \(timeout.formatted()) seconds."
+        case .timedOut(let timeLimit):
+            "Previewing took longer than \((timeLimit / .seconds(1)).formatted()) seconds."
         case .damaged(let message):
             message
         }
@@ -80,51 +80,72 @@ enum BrushPreviewError: LocalizedError, Sendable {
 }
 
 extension BrushPreviewSet {
-    /// Files above this many bytes are refused before any byte reaches the parser.
-    static let maxFileSize = 512 << 20
-
-    /// Reads and parses `url` on a background queue. Throws when the file is not a brush
-    /// file, is above `maxFileSize`, cannot be read, fails to parse, or takes longer than `timeout`.
-    static func load(_ url: URL, maxCell: Int, firstAvailable: Int? = nil, timeout: TimeInterval) throws -> BrushPreviewSet {
+    /// Reads and parses `url` on a background queue. Throws when the file is not a brush file,
+    /// is above `LoadBudget.maxFileSize`, cannot be read, fails to parse, or takes longer than
+    /// `budget.timeLimit`. When the second decode of a single brush fails or runs out of time,
+    /// the first decode is returned.
+    static func load(_ url: URL, budget: LoadBudget) throws -> BrushPreviewSet {
         let format = try BrushFormat(url: url)
         let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
-        if let fileSize, fileSize > maxFileSize {
-            throw BrushPreviewError.tooLarge(size: fileSize, limit: maxFileSize)
+        if let fileSize, fileSize > LoadBudget.maxFileSize {
+            throw BrushPreviewError.tooLarge(size: fileSize, limit: LoadBudget.maxFileSize)
         }
         let id = signposter.makeSignpostID()
         let state = signposter.beginInterval(
             "load", id: id,
-            "\(String(describing: format), privacy: .public) \(fileSize ?? 0) bytes, maxCell \(maxCell)"
+            "\(String(describing: format), privacy: .public) \(fileSize ?? 0) bytes, maxCell \(budget.cell)"
         )
         defer { signposter.endInterval("load", state) }
 
         let result = OSAllocatedUnfairLock<Result<BrushPreviewSet, any Error>?>(initialState: nil)
         let semaphore = DispatchSemaphore(value: 0)
-        let deadline = DispatchTime.now() + timeout
+        let seconds = budget.timeLimit / .seconds(1)
+        let deadline = DispatchTime.now() + seconds
         DispatchQueue.global(qos: .userInitiated).async {
-            let parsed = Result { try read(url, format: format, maxCell: maxCell, firstAvailable: firstAvailable, id: id) }
-            result.withLock { $0 = parsed }
-            semaphore.signal()
+            defer { semaphore.signal() }
+            let data: Data
+            do {
+                data = try signposter.withIntervalSignpost("read", id: id) { try Data(contentsOf: url) }
+            } catch {
+                result.withLock { $0 = .failure(error) }
+                return
+            }
+            let firstAvailable: Int? = if case .firstAvailable(let count) = budget.entries { count } else { nil }
+            let first = Result { try decode(data, format: format, cell: budget.cell, firstAvailable: firstAvailable, id: id) }
+            result.withLock { $0 = first }
+            guard case .all(let singleBrushCell?) = budget.entries, case .success(let set) = first, set.entries.count == 1 else { return }
+            let sharperID = signposter.makeSignpostID()
+            let sharper = signposter.withIntervalSignpost(
+                "load", id: sharperID,
+                "\(String(describing: format), privacy: .public) single brush again, maxCell \(singleBrushCell)"
+            ) {
+                try? decode(data, format: format, cell: singleBrushCell, firstAvailable: nil, id: sharperID)
+            }
+            if let sharper {
+                result.withLock { $0 = .success(sharper) }
+            }
         }
-        guard semaphore.wait(timeout: deadline) == .success else {
-            logger.error("Timed out after \(timeout, format: .fixed(precision: 1)) s: \(String(describing: format), privacy: .public) \(fileSize ?? 0) bytes")
-            throw BrushPreviewError.timedOut(timeout)
+        if semaphore.wait(timeout: deadline) == .timedOut {
+            if let first = result.withLock({ $0 }) {
+                return try first.get()
+            }
+            logger.error("Timed out after \(seconds, format: .fixed(precision: 1)) s: \(String(describing: format), privacy: .public) \(fileSize ?? 0) bytes")
+            throw BrushPreviewError.timedOut(budget.timeLimit)
         }
         return try result.withLock { $0! }.get()
     }
 
-    private static func read(
-        _ url: URL, format: BrushFormat, maxCell: Int, firstAvailable: Int?, id: OSSignpostID
+    private static func decode(
+        _ data: Data, format: BrushFormat, cell: Int, firstAvailable: Int?, id: OSSignpostID
     ) throws -> BrushPreviewSet {
-        let data = try signposter.withIntervalSignpost("read", id: id) { try Data(contentsOf: url) }
         var error: UnsafeMutablePointer<CChar>?
         let set = signposter.withIntervalSignpost("parse", id: id) {
             data.withUnsafeBytes { bytes in
                 let base = bytes.bindMemory(to: UInt8.self).baseAddress
                 if let firstAvailable {
-                    return bqk_preview_first_available(base, bytes.count, format.cValue, UInt32(maxCell), firstAvailable, &error)
+                    return bqk_preview_first_available(base, bytes.count, format.cValue, UInt32(cell), firstAvailable, &error)
                 }
-                return bqk_preview(base, bytes.count, format.cValue, UInt32(maxCell), &error)
+                return bqk_preview(base, bytes.count, format.cValue, UInt32(cell), &error)
             }
         }
         defer { bqk_string_free(error) }

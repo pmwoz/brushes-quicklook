@@ -3,7 +3,6 @@ import Quartz
 import SwiftUI
 
 final class PreviewViewController: NSViewController, @preconcurrency QLPreviewingController {
-    private static let previewTimeout: TimeInterval = 10
     private var request: (id: UUID, completion: (Error?) -> Void)?
     private(set) var preview: NSHostingView<PreviewContent>?
 
@@ -14,11 +13,10 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
     func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping (Error?) -> Void) {
         let id = beginPreview(completionHandler: handler)
         Task {
-            let timeout = Self.previewTimeout
             let result: Result<(BrushFormat, BrushPreviewSet), any Error> = await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     continuation.resume(returning: Result {
-                        (try BrushFormat(url: url), try Self.load(url, timeout: timeout))
+                        (try BrushFormat(url: url), try BrushPreviewSet.load(url, budget: .preview))
                     })
                 }
             }
@@ -26,16 +24,6 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
                 PreviewGrid(fileName: url.lastPathComponent, format: format, set: set)
             })
         }
-    }
-
-    /// A single brush fills a 380 pt well, so it is decoded again at a size that stays sharp there.
-    /// Both decodes share one timeout, and a failed sharper decode keeps the first result.
-    private nonisolated static func load(_ url: URL, timeout: TimeInterval) throws -> BrushPreviewSet {
-        let start = Date()
-        let set = try BrushPreviewSet.load(url, maxCell: 256, timeout: timeout)
-        let remaining = timeout - Date().timeIntervalSince(start)
-        guard set.entries.count == 1, remaining > 0 else { return set }
-        return (try? BrushPreviewSet.load(url, maxCell: 768, timeout: remaining)) ?? set
     }
 
     func beginPreview(completionHandler: @escaping (Error?) -> Void) -> UUID {
