@@ -29,6 +29,9 @@ enum BrushFormat: Sendable {
 struct BrushPreviewSet: Sendable {
     let name: String?
     let entries: [BrushEntry]
+    /// Brushes after `entries` that the parser did not reach before the time limit. Never above 0
+    /// while `entries` is empty, because `load` throws `timedOut` then.
+    let notReached: Int
 }
 
 struct BrushEntry: Sendable {
@@ -80,10 +83,11 @@ enum BrushPreviewError: LocalizedError, Sendable {
 }
 
 extension BrushPreviewSet {
-    /// Reads and parses `url` on a background queue. Throws when the file is not a brush file,
-    /// is above `LoadBudget.maxFileSize`, cannot be read, fails to parse, or takes longer than
-    /// `budget.timeLimit`. When the second decode of a single brush fails or runs out of time,
-    /// the first decode is returned.
+    /// Reads and parses `url` on a background queue. The parser stops at `budget.timeLimit` and
+    /// returns the brushes it built by then. Throws when the file is not a brush file, is above
+    /// `LoadBudget.maxFileSize`, cannot be read, fails to parse, has no brush built by the time
+    /// limit, or runs past it by more than `LoadBudget.grace`. When the second decode of a single
+    /// brush fails or runs out of time, the first decode is returned.
     static func load(_ url: URL, budget: LoadBudget) throws -> BrushPreviewSet {
         let format = try BrushFormat(url: url)
         let id = signposter.makeSignpostID()
@@ -104,21 +108,28 @@ extension BrushPreviewSet {
                 return
             }
             let firstAvailable: Int? = if case .firstAvailable(let count) = budget.entries { count } else { nil }
-            let first = Result { try decode(data, format: format, cell: budget.cell, firstAvailable: firstAvailable, id: id) }
+            let first = Result {
+                let set = try decode(data, format: format, cell: budget.cell, firstAvailable: firstAvailable, deadline: deadline, id: id)
+                guard set.notReached > 0 else { return set }
+                logger.notice("Stopped at the time limit: \(set.entries.count) built, \(set.notReached) not reached")
+                guard !set.entries.isEmpty else { throw BrushPreviewError.timedOut(budget.timeLimit) }
+                return set
+            }
             result.withLock { $0 = first }
-            guard case .all(let singleBrushCell?) = budget.entries, case .success(let set) = first, set.entries.count == 1 else { return }
+            guard case .all(let singleBrushCell?) = budget.entries, case .success(let set) = first,
+                  set.entries.count == 1, set.notReached == 0 else { return }
             let sharperID = signposter.makeSignpostID()
             let sharper = signposter.withIntervalSignpost(
                 "load", id: sharperID,
                 "\(String(describing: format), privacy: .public) single brush again, maxCell \(singleBrushCell)"
             ) {
-                try? decode(data, format: format, cell: singleBrushCell, firstAvailable: nil, id: sharperID)
+                try? decode(data, format: format, cell: singleBrushCell, firstAvailable: nil, deadline: deadline, id: sharperID)
             }
-            if let sharper {
+            if let sharper, sharper.notReached == 0 {
                 result.withLock { $0 = .success(sharper) }
             }
         }
-        if semaphore.wait(timeout: deadline) == .timedOut {
+        if semaphore.wait(timeout: deadline + LoadBudget.grace / .seconds(1)) == .timedOut {
             if let first = result.withLock({ $0 }) {
                 return try first.get()
             }
@@ -148,16 +159,20 @@ extension BrushPreviewSet {
     }
 
     private static func decode(
-        _ data: Data, format: BrushFormat, cell: Int, firstAvailable: Int?, id: OSSignpostID
+        _ data: Data, format: BrushFormat, cell: Int, firstAvailable: Int?, deadline: DispatchTime, id: OSSignpostID
     ) throws -> BrushPreviewSet {
+        let left = deadline.uptimeNanoseconds.subtractingReportingOverflow(DispatchTime.now().uptimeNanoseconds)
+        let stopAfterMilliseconds = left.overflow ? 0 : UInt32(clamping: left.partialValue / 1_000_000)
         var error: UnsafeMutablePointer<CChar>?
         let set = signposter.withIntervalSignpost("parse", id: id) {
             data.withUnsafeBytes { bytes in
                 let base = bytes.bindMemory(to: UInt8.self).baseAddress
                 if let firstAvailable {
-                    return bqk_preview_first_available(base, bytes.count, format.cValue, UInt32(cell), firstAvailable, &error)
+                    return bqk_preview_first_available(
+                        base, bytes.count, format.cValue, UInt32(cell), firstAvailable, stopAfterMilliseconds, &error
+                    )
                 }
-                return bqk_preview(base, bytes.count, format.cValue, UInt32(cell), &error)
+                return bqk_preview(base, bytes.count, format.cValue, UInt32(cell), stopAfterMilliseconds, &error)
             }
         }
         defer { bqk_string_free(error) }
@@ -173,7 +188,7 @@ extension BrushPreviewSet {
                 return BrushEntry(copying: entry)
             }
         }
-        return BrushPreviewSet(name: name, entries: entries)
+        return BrushPreviewSet(name: name, entries: entries, notReached: bqk_preview_set_not_reached(set))
     }
 }
 

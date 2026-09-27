@@ -53,6 +53,16 @@ final class PreviewTests: XCTestCase {
         }
     }
 
+    func testLoadWithNoBrushBuiltByTheTimeLimitThrowsTimedOut() throws {
+        let file = try copyFixture("ordered_set", extension: "brushset")
+        defer { try? FileManager.default.removeItem(at: file) }
+        for entries in [LoadBudget.Entries.all(singleBrushCell: nil), .firstAvailable(1)] {
+            XCTAssertThrowsError(try BrushPreviewSet.load(file, budget: LoadBudget(cell: 8, entries: entries, timeLimit: .zero))) { error in
+                guard case .timedOut = error as? BrushPreviewError else { return XCTFail("Expected timedOut, got \(error)") }
+            }
+        }
+    }
+
     func testFileAboveTheCeilingIsRefusedWithoutReadingItAlsoThroughASymlink() throws {
         let target = temporaryFile(extension: "abr")
         XCTAssertTrue(FileManager.default.createFile(atPath: target.path, contents: nil))
@@ -137,9 +147,9 @@ final class PreviewTests: XCTestCase {
         let set = BrushPreviewSet(name: "Current set", entries: [
             BrushEntry(name: "Same name", tip: .available(width: 1, height: 1, pixels: Data([255])), sourceDimensions: nil),
             BrushEntry(name: "Same name", tip: .unavailable(reason: "no Shape.png"), sourceDimensions: nil),
-        ])
+        ], notReached: 0)
         controller.finishPreview(current, result: .success(PreviewGrid(fileName: "current.brushset", format: .brushset, set: set)))
-        controller.finishPreview(old, result: .success(PreviewGrid(fileName: "old.brush", format: .brush, set: BrushPreviewSet(name: "Stale", entries: []))))
+        controller.finishPreview(old, result: .success(PreviewGrid(fileName: "old.brush", format: .brush, set: BrushPreviewSet(name: "Stale", entries: [], notReached: 0))))
         controller.finishPreview(current, result: .failure(BrushPreviewError.damaged("Late")))
         XCTAssertEqual(newCompletions.count, 1)
         XCTAssertNil(newCompletions[0])
@@ -187,7 +197,7 @@ final class PreviewTests: XCTestCase {
         var completions: [Error?] = []
         let id = controller.beginPreview { completions.append($0) }
         controller.finishPreview(id, result: .failure(BrushPreviewError.damaged("block claims 9 bytes")))
-        controller.finishPreview(id, result: .success(PreviewGrid(fileName: "bad.abr", format: .abr, set: BrushPreviewSet(name: nil, entries: []))))
+        controller.finishPreview(id, result: .success(PreviewGrid(fileName: "bad.abr", format: .abr, set: BrushPreviewSet(name: nil, entries: [], notReached: 0))))
         XCTAssertEqual(completions.count, 1)
         XCTAssertNil(completions[0])
         let hosted = try XCTUnwrap(controller.preview)
@@ -214,6 +224,16 @@ final class PreviewTests: XCTestCase {
         let unreadable = PreviewFailure(error: denied)
         XCTAssertEqual(unreadable.message, denied.localizedDescription)
         XCTAssertNil(unreadable.details)
+    }
+
+    func testGridCountsBrushesTheParserDidNotReach() {
+        let set = BrushPreviewSet(name: nil, entries: [
+            BrushEntry(name: "Built", tip: .available(width: 1, height: 1, pixels: Data([255])), sourceDimensions: nil),
+        ], notReached: 3)
+        let grid = PreviewGrid(fileName: "big.brushset", format: .brushset, set: set)
+        XCTAssertEqual(grid.notReached, 3)
+        XCTAssertEqual(PreviewGrid.notReachedText(3), "3 more brushes were not loaded. Previews stop loading after 10 seconds.")
+        XCTAssertEqual(PreviewGrid.notReachedText(1), "1 more brush was not loaded. Previews stop loading after 10 seconds.")
     }
 
     func testCountsNameBrushesAndThoseWithoutPreview() {

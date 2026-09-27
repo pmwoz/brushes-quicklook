@@ -5,6 +5,10 @@ struct LoadBudget: Sendable {
     static let maxFileSize = 512 << 20
     /// A 512 pt thumbnail at 2x.
     static let maxCell = 1024
+    /// How long a load waits past its time limit before it gives up on the parser. The parser checks
+    /// the time only between brushes, so reading the file, parsing its index and the brush in progress
+    /// can run over.
+    static let grace: Duration = .seconds(1)
 
     enum Entries: Sendable {
         /// A file with one brush is decoded again at `singleBrushCell` from the same bytes, inside the same time limit.
