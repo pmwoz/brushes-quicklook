@@ -12,9 +12,9 @@ struct BrushThumbnail {
 
         /// A file that is too large or too slow to load may still be a valid brush file.
         init(loadError: any Error) {
-            switch loadError {
-            case BrushPreviewError.tooLarge, BrushPreviewError.timedOut: self = .notLoaded
-            default: self = .unreadable
+            switch loadError as? BrushPreviewError {
+            case .tooLarge, .timedOut: self = .notLoaded
+            case .damaged, .unsupportedExtension, nil: self = .unreadable
             }
         }
     }

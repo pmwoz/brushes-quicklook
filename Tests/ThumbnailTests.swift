@@ -94,6 +94,11 @@ final class ThumbnailTests: XCTestCase {
 
         let thumbnail = try BrushThumbnail.load(file, maximumSize: size, scale: 2)
         guard case .empty(.notLoaded) = thumbnail.layout else { return XCTFail("Expected the not-loaded state, got \(thumbnail.layout)") }
+        let unreadable = try BrushThumbnail.load(temporaryFile(extension: "abr"), maximumSize: size, scale: 2)
+        let drawn = try bitmap(draw(thumbnail, pixels: 128))
+        XCTAssertEqual(drawn, try bitmap(draw(BrushThumbnail(format: .abr, tips: [], size: size), pixels: 128)),
+                       "Draws the brush glyph and badge of the no-tips state")
+        XCTAssertNotEqual(drawn, try bitmap(draw(unreadable, pixels: 128)), "Does not draw the warning glyph")
     }
 
     func testOnlyTooLargeAndTimedOutLoadErrorsShowNotLoadedState() {
@@ -184,6 +189,10 @@ final class ThumbnailTests: XCTestCase {
         ))
         thumbnail.draw(in: context, size: CGSize(width: side, height: side))
         return context
+    }
+
+    private func bitmap(_ context: CGContext) throws -> Data {
+        Data(bytes: try XCTUnwrap(context.data), count: context.bytesPerRow * context.height)
     }
 
     private func pixel(_ context: CGContext, x: Int, y: Int) throws -> [UInt8] {
