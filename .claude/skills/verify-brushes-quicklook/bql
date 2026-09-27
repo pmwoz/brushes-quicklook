@@ -1,0 +1,581 @@
+#!/usr/bin/env python3
+"""Drive Brushes Quick Look the way a user does and capture evidence.
+
+Every subcommand prints one JSON object on stdout. Exit 0 means ok, 1 means the
+check ran and failed, 2 means it could not run (the JSON says what to do).
+"""
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[3]
+APP = Path("/Applications/BrushesQuickLook.app")
+BUILD = REPO / "build.noindex/Build/Products/Release/BrushesQuickLook.app"
+BUNDLE_ID = "pl.esdesign.brushesquicklook"
+PLUGINS = {"preview": "BrushesPreview", "thumbnail": "BrushesThumbnail"}
+WORK = REPO / "build.noindex/verify"
+FIXTURES = WORK / "fixtures"
+EVIDENCE = WORK / "evidence"
+STATE = WORK / "state.json"
+CORPUS = REPO / "ffi/tests/corpus"
+CORPUS_EXTENSIONS = {"preview_abr": "abr", "preview_brush": "brush", "preview_brushset": "brushset"}
+BRUSH_EXTENSIONS = {"abr", "brush", "brushset"}
+REAL_FILES_ENV = "BQL_REAL_FILES"
+CRASH_DIR = Path.home() / "Library/Logs/DiagnosticReports"
+LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+              "LaunchServices.framework/Support/lsregister")
+SOURCES = ["App", "Preview", "Thumbnail", "Shared", "ffi/src", "ffi/Cargo.toml", "ffi/Cargo.lock", "project.yml"]
+
+WINDOWS_JS = """
+ObjC.import("CoreGraphics");
+const list = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(
+    $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID)));
+JSON.stringify(list.map(w => ({id: w.kCGWindowNumber, pid: w.kCGWindowOwnerPID,
+    owner: w.kCGWindowOwnerName, layer: w.kCGWindowLayer, bounds: w.kCGWindowBounds})));
+"""
+
+OPEN_FINDER_WINDOW = """
+on run argv
+    tell application "Finder"
+        set w to make new Finder window to (POSIX file (item 1 of argv) as alias)
+        select (POSIX file (item 2 of argv) as alias)
+        activate
+        return id of w
+    end tell
+end run
+"""
+
+CLOSE_FINDER_WINDOW = """
+on run argv
+    tell application "Finder"
+        if exists Finder window id (item 1 of argv as integer) then
+            close Finder window id (item 1 of argv as integer)
+            return 1
+        end if
+        return 0
+    end tell
+end run
+"""
+
+
+class Fail(Exception):
+    def __init__(self, error, fix):
+        super().__init__(error)
+        self.error = error
+        self.fix = fix
+
+
+def emit(result, code=0):
+    print(json.dumps(result, indent=2, default=str))
+    sys.exit(code)
+
+
+def note(message):
+    print(message, file=sys.stderr, flush=True)
+
+
+def run(args, timeout=120, check=False):
+    proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    if check and proc.returncode != 0:
+        raise Fail(f"{' '.join(map(str, args))} exited {proc.returncode}: {proc.stderr.strip() or proc.stdout.strip()}",
+                   "Run the command by hand to see the full error.")
+    return proc
+
+
+def osascript(script, *args, language="AppleScript"):
+    return run(["osascript", "-l", language, "-e", script, *map(str, args)], timeout=60)
+
+
+# State: what this CLI started, so cleanup kills exactly that and nothing else.
+
+def load_state():
+    if STATE.exists():
+        return json.loads(STATE.read_text())
+    return {"qlmanage": [], "finder_windows": [], "host_app_opened": False}
+
+
+def save_state(state):
+    WORK.mkdir(parents=True, exist_ok=True)
+    STATE.write_text(json.dumps(state, indent=2))
+
+
+def track(key, value):
+    state = load_state()
+    state[key].append(value)
+    save_state(state)
+
+
+def untrack(key, value):
+    state = load_state()
+    state[key] = [item for item in state[key] if item != value]
+    save_state(state)
+
+
+def new_run(command):
+    directory = EVIDENCE / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{command}"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def finish(run_dir, result):
+    ok = result["ok"]
+    result = {"ok": ok, "evidence_dir": str(run_dir), **{k: v for k, v in result.items() if k != "ok"}}
+    (run_dir / "result.json").write_text(json.dumps(result, indent=2, default=str))
+    emit(result, 0 if ok else 1)
+
+
+def brush_files(paths):
+    files = []
+    for path in map(Path, paths):
+        if not path.exists():
+            raise Fail(f"{path} does not exist", "Pass existing files or folders. Run `bql fixtures` for the corpus.")
+        candidates = sorted(path.iterdir()) if path.is_dir() else [path]
+        files += [p.resolve() for p in candidates if p.is_file() and p.suffix[1:].lower() in BRUSH_EXTENSIONS]
+    if not files:
+        raise Fail(f"No .abr, .brush or .brushset files in {', '.join(map(str, paths))}",
+                   "Quick Look routes files to the extensions by extension. Run `bql fixtures` for named copies.")
+    return files
+
+
+def crash_reports():
+    if not CRASH_DIR.is_dir():
+        return {}
+    return {p.name: p for p in CRASH_DIR.iterdir() if p.name.startswith("Brushes")}
+
+
+def new_crashes(before):
+    return [{"report": str(path), "process": re.split(r"[-_.]", name)[0], "time": path.stat().st_mtime}
+            for name, path in sorted(crash_reports().items()) if name not in before]
+
+
+def readable(crashes):
+    return [{**crash, "time": datetime.fromtimestamp(crash["time"]).isoformat(timespec="seconds")} for crash in crashes]
+
+
+def windows():
+    proc = osascript(WINDOWS_JS, language="JavaScript")
+    if proc.returncode != 0:
+        raise Fail(f"Cannot list windows: {proc.stderr.strip()}", "Run from a logged-in GUI session.")
+    return json.loads(proc.stdout)
+
+
+def wait_for(probe, timeout, interval=0.25):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        found = probe()
+        if found:
+            return found
+        time.sleep(interval)
+    return None
+
+
+def capture(window_id, png):
+    png.parent.mkdir(parents=True, exist_ok=True)
+    proc = run(["screencapture", "-x", "-o", "-l", str(window_id), str(png)])
+    if proc.returncode != 0 or not png.exists():
+        raise Fail(f"screencapture failed: {proc.stderr.strip()}",
+                   "Grant Screen Recording to the app running this shell in System Settings > Privacy & Security.")
+
+
+def log_since(start, predicate, signposts=False):
+    proc = run(["/usr/bin/log", "show", "--start", start.strftime("%Y-%m-%d %H:%M:%S"),
+                "--style", "ndjson", "--predicate", predicate, *(["--signpost"] if signposts else [])], timeout=180)
+    return [event for event in map(json.loads, filter(lambda line: line.startswith("{"), proc.stdout.splitlines()))
+            if "eventMessage" in event]
+
+
+def extension_requests(start):
+    """BrushesPreview logs this line once per preview request, from Finder and qlmanage alike."""
+    events = log_since(start, 'process == "BrushesPreview" AND eventMessage == "beginning extension request"')
+    return [(datetime.strptime(e["timestamp"], "%Y-%m-%d %H:%M:%S.%f%z").timestamp(),
+             {"pid": e.get("processID"), "binary": e.get("processImagePath")}) for e in events]
+
+
+# Drivers. Each exercises one file through the real extension and returns what it saw.
+
+def render_thumbnail(file, size, scale, out_dir):
+    out = out_dir / f"{size}pt@{scale:g}x"
+    out.mkdir(parents=True, exist_ok=True)
+    args = ["qlmanage", "-x", "-t", "-s", str(size), "-f", f"{scale:g}", "-o", str(out), str(file)]
+    try:
+        proc = run(args, timeout=60)
+        message = proc.stdout.strip().splitlines()[-2:] if proc.stdout.strip() else [proc.stderr.strip()]
+    except subprocess.TimeoutExpired:
+        message = ["qlmanage timed out after 60 s and was killed"]
+    png = out / f"{file.name}.png"
+    if png.exists():
+        return {"file": str(file), "size_pt": size, "scale": scale, "png": str(png)}
+    return {"file": str(file), "size_pt": size, "scale": scale, "png": None, "qlmanage": " ".join(message)}
+
+
+def preview_with_qlmanage(file, png, settle):
+    proc = subprocess.Popen(["qlmanage", "-p", str(file)], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+    record = {"pid": proc.pid, "file": str(file)}
+    track("qlmanage", record)
+    try:
+        window = wait_for(lambda: next((w for w in windows() if w["pid"] == proc.pid and w["layer"] == 0
+                                        and w["bounds"]["Height"] > 100), None), timeout=20)
+        if window:
+            time.sleep(settle)
+            capture(window["id"], png)
+        return {"file": str(file), "png": str(png) if window else None,
+                "problem": None if window else "qlmanage opened no preview window within 20 s"}
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        untrack("qlmanage", record)
+
+
+def finder_panel():
+    # Finder's Quick Look panel is the Finder-owned window on layer 3.
+    return next((w for w in windows() if w["owner"] == "Finder" and w["layer"] == 3), None)
+
+
+def press(key_code):
+    proc = osascript(f'tell application "System Events" to key code {key_code}')
+    if proc.returncode != 0:
+        raise Fail(f"Cannot send key presses: {proc.stderr.strip()}",
+                   "Grant Accessibility to the app running this shell in System Settings > Privacy & Security, "
+                   "or use `bql preview`, which needs no key presses.")
+
+
+def preview_with_finder(file, png, settle):
+    if finder_panel():
+        raise Fail("A Quick Look panel is already open in Finder",
+                   "Close it (Escape in Finder) and rerun. The space bar toggles the panel.")
+    opened = osascript(OPEN_FINDER_WINDOW, file.parent, file)
+    if opened.returncode != 0:
+        raise Fail(f"Finder could not open {file.parent}: {opened.stderr.strip()}",
+                   "Allow the app running this shell to control Finder in System Settings > Privacy & Security > "
+                   "Automation.")
+    window_id = int(opened.stdout.strip())
+    track("finder_windows", window_id)
+    try:
+        time.sleep(1)
+        press(49)  # space
+        panel = wait_for(finder_panel, timeout=10)
+        if panel:
+            time.sleep(settle)
+            capture(panel["id"], png)
+            osascript('tell application "Finder" to activate')
+            press(53)  # escape
+            wait_for(lambda: not finder_panel(), timeout=5)
+        return {"file": str(file), "png": str(png) if panel else None,
+                "problem": None if panel else "Finder showed no Quick Look panel within 10 s"}
+    finally:
+        osascript(CLOSE_FINDER_WINDOW, window_id)
+        untrack("finder_windows", window_id)
+
+
+DRIVERS = {"qlmanage": preview_with_qlmanage, "finder": preview_with_finder}
+
+
+def drive_previews(files, run_dir, settle, via):
+    start = datetime.now() - timedelta(seconds=1)
+    results = []
+    for file in files:
+        began = time.time()
+        result = DRIVERS[via](file, run_dir / "preview" / f"{file.name}.png", settle)
+        results.append((began, time.time(), result))
+    time.sleep(1)  # log ingestion lags the event
+    requests = extension_requests(start)
+    for began, ended, result in results:
+        served = next((process for at, process in requests if began <= at <= ended), None)
+        result["extension"] = served
+        if result["png"] and not served:
+            result["problem"] = "the preview window opened but no BrushesPreview request ran for it"
+        elif served and not (served["binary"] or "").startswith(str(APP)):
+            result["problem"] = f"served by {served['binary']}, not the installed app. Run `bql doctor`."
+    return [result for _, _, result in results]
+
+
+# Subcommands.
+
+def cdhash(path):
+    match = re.search(r"^CDHash=(\w+)$", run(["codesign", "-dvvv", str(path)]).stderr, re.M)
+    return match.group(1) if match else None
+
+
+def bundles(app):
+    return {"app": app, **{kind: app / f"Contents/PlugIns/{name}.appex" for kind, name in PLUGINS.items()}}
+
+
+def cmd_doctor(args):
+    checks = []
+
+    def check(name, status, detail, fix=None):
+        checks.append({"check": name, "status": status, "detail": detail, **({"fix": fix} if fix else {})})
+
+    install_fix = "Run `bql install`."
+    if not APP.exists():
+        check("installed", "fail", f"{APP} is missing", install_fix)
+    if not BUILD.exists():
+        check("release-build", "fail", f"{BUILD} is missing", install_fix)
+
+    installed = {kind: cdhash(path) for kind, path in bundles(APP).items()} if APP.exists() else {}
+    if APP.exists() and BUILD.exists():
+        built = {kind: cdhash(path) for kind, path in bundles(BUILD).items()}
+        for kind in installed:
+            same = installed[kind] is not None and installed[kind] == built[kind]
+            check(f"cdhash-{kind}", "ok" if same else "fail",
+                  {"installed": installed[kind], "release_build": built[kind]},
+                  None if same else "The installed app is not the Release build of this checkout. " + install_fix)
+        tracked = run(["git", "-C", str(REPO), "ls-files", "--", *SOURCES]).stdout.split()
+        newest = max(((REPO / f).stat().st_mtime, f) for f in tracked if (REPO / f).exists())
+        built_at = (BUILD / "Contents/MacOS/BrushesQuickLook").stat().st_mtime
+        stale = newest[0] > built_at
+        check("build-fresh", "warn" if stale else "ok",
+              {"newest_source": newest[1], "newer_than_build": stale},
+              "A source file changed after the last Release build. " + install_fix if stale else None)
+
+    for kind, name in PLUGINS.items():
+        bundle_id = f"{BUNDLE_ID}.{kind}"
+        lines = [line for line in run(["pluginkit", "-m", "-v", "-A", "-i", bundle_id]).stdout.splitlines()
+                 if bundle_id in line]
+        expected = str(APP / f"Contents/PlugIns/{name}.appex")
+        good = len(lines) == 1 and lines[0].rstrip().endswith(expected) and not lines[0].startswith("-")
+        check(f"pluginkit-{kind}", "ok" if good else "fail", lines or "not registered",
+              None if good else f"Expected one enabled registration at {expected}. " + install_fix)
+
+    dump = run([LSREGISTER, "-dump"], timeout=120).stdout
+    paths = sorted(set(re.findall(r"^\s*path:\s*(.*BrushesQuickLook\.app)\b", dump, re.M)))
+    extra = [p for p in paths if p != str(APP)]
+    check("launchservices", "warn" if extra else "ok", paths,
+          f"Other copies are registered; Quick Look may route to them. {install_fix} unregisters them." if extra else None)
+
+    for kind, name in PLUGINS.items():
+        for pid in run(["pgrep", "-x", name]).stdout.split():
+            running = cdhash(pid)
+            stale = running != installed.get(kind)
+            check(f"running-{kind}", "warn" if stale else "ok", {"pid": int(pid), "cdhash": running},
+                  f"This {name} process runs an older binary and keeps serving requests. Run `kill {pid}`; "
+                  "Quick Look starts a fresh one on the next request." if stale else None)
+
+    ok = all(c["status"] != "fail" for c in checks)
+    emit({"ok": ok, "repo": str(REPO), "installed_app": str(APP), "release_build": str(BUILD), "checks": checks},
+         0 if ok else 1)
+
+
+def cmd_install(args):
+    script = REPO / "scripts/install.sh"
+    if args.dry_run:
+        dump = run([LSREGISTER, "-dump"], timeout=120).stdout
+        paths = sorted(set(re.findall(r"^\s*path:\s*(.*BrushesQuickLook\.app)\b", dump, re.M)))
+        emit({"ok": True, "dry_run": True, "script": str(script), "would": [
+            "xcodegen generate",
+            f"xcodebuild Release into {BUILD}",
+            f"scripts/check-build.sh {BUILD}",
+            {"unregister_from_launchservices": [p for p in paths if p != str(APP)]},
+            f"quit the running app, delete {APP} and copy the Release build there",
+            f"register {APP} and both extensions with lsregister and pluginkit",
+            f"open {APP} (its window stays open until `bql cleanup`)",
+        ]})
+    note("building Release and installing, this takes a few minutes")
+    proc = run([str(script)], timeout=1800)
+    steps = re.findall(r"^ok (.+)$", proc.stdout, re.M)
+    failed = re.search(r"^FAIL (\S+) (.*)$", proc.stderr, re.M)
+    if proc.returncode != 0:
+        fixes = {
+            "build": "Run the xcodebuild command from README.md to see the full compiler output.",
+            "check-build": "The Release product failed a lipo, hardened runtime, sandbox or UTType check. "
+                           "Run scripts/check-build.sh on it.",
+            "replace": "Check that /Applications is writable and the app is not open from a mounted image.",
+            "verify": "Another copy is still registered. Run `bql doctor` and unregister it with lsregister -u.",
+        }
+        step = failed.group(1) if failed else "unknown"
+        emit({"ok": False, "steps": steps, "failed_step": step,
+              "error": failed.group(2) if failed else proc.stderr.strip()[-2000:],
+              "fix": fixes.get(step, "Run scripts/install.sh by hand to see the full output.")}, 1)
+    state = load_state()
+    state["host_app_opened"] = True
+    save_state(state)
+    emit({"ok": True, "steps": steps, "next": "Run `bql doctor`."})
+
+
+def cmd_fixtures(args):
+    corpus_dir = FIXTURES / "corpus"
+    shutil.rmtree(corpus_dir, ignore_errors=True)
+    corpus_dir.mkdir(parents=True)
+    copied = []
+    for folder, extension in CORPUS_EXTENSIONS.items():
+        for source in sorted((CORPUS / folder).iterdir()):
+            target = corpus_dir / f"{source.name}.{extension}"
+            if target.exists():
+                raise Fail(f"Two corpus files map to {target.name}", "Rename one of them in bql's corpus copy.")
+            shutil.copyfile(source, target)
+            copied.append(str(target))
+    real_dir = os.environ.get(REAL_FILES_ENV)
+    real = []
+    if real_dir:
+        if not Path(real_dir).is_dir():
+            raise Fail(f"{REAL_FILES_ENV}={real_dir} is not a folder", f"Point {REAL_FILES_ENV} at a folder of brush files.")
+        real = [str(p) for p in brush_files([real_dir])]
+    emit({"ok": True, "corpus_dir": str(corpus_dir), "corpus": copied,
+          "real_files_env": REAL_FILES_ENV, "real": real,
+          "note": None if real_dir else f"Set {REAL_FILES_ENV} to a folder of real brush files to include them."})
+
+
+def cmd_thumb(args):
+    files = brush_files(args.files)
+    run_dir = new_run("thumb")
+    before = crash_reports()
+    results = [render_thumbnail(f, size, args.scale, run_dir / "thumb") for f in files for size in args.size]
+    time.sleep(1)
+    crashes = new_crashes(before)
+    finish(run_dir, {"ok": all(r["png"] for r in results) and not crashes,
+                     "results": results, "new_crash_reports": readable(crashes)})
+
+
+def cmd_preview(args, via="qlmanage"):
+    files = brush_files(args.files)
+    run_dir = new_run(args.command)
+    before = crash_reports()
+    results = drive_previews(files, run_dir, args.settle, via)
+    crashes = new_crashes(before)
+    finish(run_dir, {"ok": not any(r["problem"] for r in results) and not crashes,
+                     "results": results, "new_crash_reports": readable(crashes)})
+
+
+def cmd_finder(args):
+    cmd_preview(args, via="finder")
+
+
+def cmd_hostile(args):
+    targets = args.paths
+    if not targets:
+        corpus_dir = FIXTURES / "corpus"
+        if not corpus_dir.is_dir():
+            raise Fail("No fixtures yet", "Run `bql fixtures` first, or pass folders or files.")
+        targets = [str(corpus_dir)] + ([os.environ[REAL_FILES_ENV]] if os.environ.get(REAL_FILES_ENV) else [])
+    files = brush_files(targets)
+    run_dir = new_run("hostile")
+    before = crash_reports()
+    started = []
+    rows = []
+    for file in files:
+        note(f"hostile {file.name}")
+        started.append(time.time())
+        thumbnail = render_thumbnail(file, 256, 1, run_dir / "thumb")
+        preview = drive_previews([file], run_dir, args.settle, args.via)[0]
+        rows.append({"file": str(file), "thumbnail_png": thumbnail["png"], "preview_png": preview["png"],
+                     "extension": preview["extension"],
+                     "problems": [p for p in [None if thumbnail["png"] else "no thumbnail: " + thumbnail["qlmanage"],
+                                              preview["problem"]] if p]})
+    time.sleep(3)  # ReportCrash writes the report a moment after the process dies.
+    crashes = new_crashes(before)
+    for crash in crashes:
+        earlier = [i for i, t in enumerate(started) if t <= crash["time"]]
+        crash["likely_file"] = rows[earlier[-1]]["file"] if earlier else None
+    unexercised = [row["file"] for row in rows if row["problems"]]
+    finish(run_dir, {"ok": not crashes and not unexercised, "via": args.via, "files": len(rows),
+                     "crashed": len(crashes), "unexercised": unexercised,
+                     "new_crash_reports": readable(crashes), "results": rows})
+
+
+def cmd_logs(args):
+    start = datetime.now() - timedelta(seconds=args.last)
+    events = log_since(start, f'subsystem == "{BUNDLE_ID}"', signposts=True)
+
+    def at(event):
+        return datetime.strptime(event["timestamp"], "%Y-%m-%d %H:%M:%S.%f%z")
+
+    begins, ends = {}, {}
+    for event in events:
+        if event.get("eventType") == "signpostEvent" and event.get("signpostType") in ("begin", "end"):
+            key = (event["processID"], event["signpostID"], event["signpostName"])
+            (begins if event["signpostType"] == "begin" else ends).setdefault(key, event)
+    loads = []
+    for (pid, signpost_id, name), begin in begins.items():
+        if name != "load":
+            continue
+        ms = {}
+        for interval in ("load", "read", "parse", "tips"):
+            key = (pid, signpost_id, interval)
+            if key in begins:
+                end = ends.get(key)
+                ms[interval] = round((at(end) - at(begins[key])).total_seconds() * 1000, 2) if end else None
+        loads.append({"process": Path(begin.get("processImagePath", "")).name, "pid": pid,
+                      "time": begin["timestamp"], "detail": begin["eventMessage"], "ms": ms})
+    loads.sort(key=lambda load: load["time"])
+    messages = [{"time": e["timestamp"], "process": Path(e.get("processImagePath", "")).name,
+                 "category": e.get("category"), "level": e.get("messageType"), "message": e["eventMessage"]}
+                for e in events if e.get("eventType") == "logEvent"]
+    since = start.isoformat(timespec="seconds")
+    if not loads:
+        emit({"ok": False, "since": since, "messages": messages,
+              "error": f"No load intervals from {BUNDLE_ID} in the last {args.last:g} s",
+              "fix": "Drive a `bql thumb` or `bql preview` first, or raise --last. "
+                     "Run `bql doctor` to check that the installed build is one that logs."}, 1)
+    emit({"ok": True, "since": since, "loads": loads, "messages": messages})
+
+
+def cmd_cleanup(args):
+    state = load_state()
+    killed, closed = [], []
+    for record in state["qlmanage"]:
+        command = run(["ps", "-p", str(record["pid"]), "-o", "command="]).stdout.strip()
+        if command.startswith("qlmanage -p") and record["file"] in command:
+            os.kill(record["pid"], 15)
+            killed.append(record)
+    for window_id in state["finder_windows"]:
+        if osascript(CLOSE_FINDER_WINDOW, window_id).stdout.strip() not in ("", "0"):
+            closed.append(window_id)
+    quit_app = False
+    if state["host_app_opened"]:
+        quit_app = osascript(f'tell application id "{BUNDLE_ID}" to quit').returncode == 0
+    shutil.rmtree(FIXTURES, ignore_errors=True)
+    STATE.unlink(missing_ok=True)
+    runs = sorted(p.name for p in EVIDENCE.iterdir()) if EVIDENCE.is_dir() else []
+    emit({"ok": True, "killed_qlmanage": killed, "closed_finder_windows": closed, "quit_host_app": quit_app,
+          "removed": str(FIXTURES), "evidence_dir": str(EVIDENCE), "evidence_runs_kept": runs})
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="bql", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Typical run: bql doctor; bql fixtures; bql thumb <file>; bql preview <file>; bql cleanup")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("doctor", help="read-only: is the installed app this checkout's Release build, registered and live")
+    install = sub.add_parser("install", help="build Release and install it to /Applications via scripts/install.sh")
+    install.add_argument("--dry-run", action="store_true", help="list what install would change, change nothing")
+    sub.add_parser("fixtures", help=f"copy ffi/tests/corpus with brush extensions; list files in ${REAL_FILES_ENV}")
+    thumb = sub.add_parser("thumb", help="render Finder thumbnails headlessly with qlmanage -x -t")
+    thumb.add_argument("files", nargs="+", help="brush files or folders of them")
+    thumb.add_argument("--size", type=int, action="append", help="icon size in points, repeatable (default 256 and 48)")
+    thumb.add_argument("--scale", type=float, default=1, help="backing scale factor (default 1)")
+    for name, help_text in [("preview", "open the space-bar preview in a qlmanage window and capture it"),
+                            ("finder", "select the file in a new Finder window, press space, capture the panel")]:
+        command = sub.add_parser(name, help=help_text)
+        command.add_argument("files", nargs="+", help="brush files or folders of them")
+        command.add_argument("--settle", type=float, default=2, help="seconds to wait after the window appears")
+    hostile = sub.add_parser("hostile", help="thumbnail and preview every file, fail on any new crash report")
+    hostile.add_argument("paths", nargs="*", help=f"files or folders (default: the fixture corpus and ${REAL_FILES_ENV})")
+    hostile.add_argument("--via", choices=sorted(DRIVERS), default="qlmanage", help="preview driver (default qlmanage)")
+    hostile.add_argument("--settle", type=float, default=2, help="seconds to wait after the window appears")
+    logs = sub.add_parser("logs", help="per-load read/parse/tips intervals and extension log messages from the unified log")
+    logs.add_argument("--last", type=float, default=300, help="seconds of log to read (default 300)")
+    sub.add_parser("cleanup", help="kill the qlmanage and Finder windows bql started, delete fixtures, keep evidence")
+    args = parser.parse_args()
+    if args.command == "thumb" and not args.size:
+        args.size = [256, 48]
+    try:
+        globals()[f"cmd_{args.command}"](args)
+    except Fail as failure:
+        emit({"ok": False, "error": failure.error, "fix": failure.fix}, 2)
+
+
+if __name__ == "__main__":
+    main()

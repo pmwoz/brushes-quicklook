@@ -84,8 +84,10 @@ Tests:
 
 `ffi/tests/corpus` mirrors brushkit's fuzz seed corpus and is replayed by `cargo test`.
 `scripts/check-corpus.sh` checks the mirror against the pinned brushkit tag.
-`scripts/preview-hostile.sh` previews a folder of corrupt files through Finder's
-Quick Look and reports which ones the extension handled and whether it crashed.
+`.claude/skills/verify-brushes-quicklook/bql` drives the installed extensions
+the way a user does. `bql hostile` renders the thumbnail and the preview of
+every corpus file, and of the files in `$BQL_REAL_FILES` when it is set. It
+fails on any new crash report. `bql --help` lists the other commands.
 
 ```
 cargo test --manifest-path ffi/Cargo.toml
