@@ -65,7 +65,7 @@ bql thumb <file|dir>...             # Finder thumbnail, headless: qlmanage -x -t
 bql thumb <file> --size 64 --scale 2
 bql preview <file|dir>...           # space-bar preview in a qlmanage window, captured by window id
 bql finder <file|dir>...            # the real Finder path: new Finder window, select, space, capture panel, Escape
-bql hostile [dir|file...]           # thumbnail and preview every file, exit 1 on a crash, an unexercised file or too many retries
+bql hostile [dir|file...]           # thumbnail and preview every file, exit 1 on a crash, a capped crash-report wait, an unexercised file or too many retries
 bql hostile --via finder            # the same sweep through Finder
 bql logs [--last SECONDS]           # load intervals and log messages from the extensions (default 300 s)
 ```
@@ -126,8 +126,11 @@ Proof standards:
   `~/Library/Logs/DiagnosticReports`, and `hostile` names the likely file
   for each one. ReportCrash can write a report 25 s after the crash, so
   `thumb`, `preview`, `finder` and `hostile` wait at the end until no new
-  report has arrived for 30 s, at most 120 s. The wait runs once per command,
-  so pass every file of a check to one command.
+  report has arrived for 30 s, at most 120 s. When a report arrives too late
+  for 30 quiet seconds to fit before 120 s, the result has
+  `crash_wait_capped: true` and the command fails, because a report from the
+  run can arrive later. The wait runs once per
+  command, so pass every file of a check to one command.
 - `qlmanage -p` hosts the same extension as Finder, with a `[DEBUG]` window
   title. When the change is about Finder behavior (panel size, the space-bar
   toggle, file switching), prove it with `bql finder`.

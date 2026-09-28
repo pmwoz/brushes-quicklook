@@ -31,6 +31,7 @@ CORPUS_EXTENSIONS = {"preview_abr": "abr", "preview_brush": "brush", "preview_br
 BRUSH_EXTENSIONS = {"abr", "brush", "brushset"}
 REAL_FILES_ENV = "BQL_REAL_FILES"
 CRASH_DIR = Path.home() / "Library/Logs/DiagnosticReports"
+CRASH_WAIT_CAP = 120
 LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
               "LaunchServices.framework/Support/lsregister")
 SOURCES = ["App", "Preview", "Thumbnail", "Shared", "ffi/src", "ffi/Cargo.toml", "ffi/Cargo.lock", "project.yml"]
@@ -163,13 +164,15 @@ def capture_time(report):
 
 def wait_for_new_crashes(before, since):
     # A hosted runner wrote reports up to 25 s after the crash, so wait until none has arrived for 30 s.
-    # Crashes outside the run can keep reports coming, so stop after 120 s.
+    # Crashes outside the run can keep reports coming, so stop at the cap.
     note("waiting for crash reports")
     reports, quiet_since = crash_reports(), time.time()
-    deadline = quiet_since + 120
+    deadline = quiet_since + CRASH_WAIT_CAP
+    capped = False
     while time.time() - quiet_since < 30:
         if time.time() > deadline:
-            note("crash reports still arriving after 120 s, collecting what is there")
+            note(f"no quiet 30 s before the {CRASH_WAIT_CAP} s cap, the run fails")
+            capped = True
             break
         time.sleep(1)
         latest = crash_reports()
@@ -177,12 +180,22 @@ def wait_for_new_crashes(before, since):
             reports, quiet_since = latest, time.time()
     crashes = [{"report": str(path), "process": re.split(r"[-_.]", name)[0], "time": capture_time(path)}
                for name, path in sorted(reports.items()) if name not in before]
-    return [crash for crash in crashes if crash["time"] is None or crash["time"] >= since]
+    return [crash for crash in crashes if crash["time"] is None or crash["time"] >= since], capped
 
 
 def readable(crashes):
     return [{**crash, "time": crash["time"] and datetime.fromtimestamp(crash["time"]).isoformat(timespec="seconds")}
             for crash in crashes]
+
+
+def crash_verdict(crashes, capped):
+    fields = {"new_crash_reports": readable(crashes), "crash_wait_capped": capped}
+    if capped and not crashes:
+        fields |= {"error": f"Brushes crash reports kept arriving until the {CRASH_WAIT_CAP} s wait ended, "
+                            "so a crash from this run may be missing",
+                   "fix": "Find what keeps writing Brushes* reports to ~/Library/Logs/DiagnosticReports, "
+                          "wait until they stop, and rerun."}
+    return not crashes and not capped, fields
 
 
 def windows():
@@ -495,9 +508,8 @@ def cmd_thumb(args):
     run_dir = new_run("thumb")
     before, since = crash_reports(), time.time()
     results = [render_thumbnail(f, size, args.scale, run_dir / "thumb") for f in files for size in args.size]
-    crashes = wait_for_new_crashes(before, since)
-    finish(run_dir, {"ok": all(r["png"] for r in results) and not crashes,
-                     "results": results, "new_crash_reports": readable(crashes)})
+    crashes_ok, crash_fields = crash_verdict(*wait_for_new_crashes(before, since))
+    finish(run_dir, {"ok": all(r["png"] for r in results) and crashes_ok, "results": results, **crash_fields})
 
 
 def cmd_preview(args, via="qlmanage"):
@@ -505,9 +517,8 @@ def cmd_preview(args, via="qlmanage"):
     run_dir = new_run(args.command)
     before, since = crash_reports(), time.time()
     results = drive_previews(files, run_dir, args.settle, via)
-    crashes = wait_for_new_crashes(before, since)
-    finish(run_dir, {"ok": not any(r["problem"] for r in results) and not crashes,
-                     "results": results, "new_crash_reports": readable(crashes)})
+    crashes_ok, crash_fields = crash_verdict(*wait_for_new_crashes(before, since))
+    finish(run_dir, {"ok": not any(r["problem"] for r in results) and crashes_ok, "results": results, **crash_fields})
 
 
 def cmd_finder(args):
@@ -535,26 +546,28 @@ def cmd_hostile(args):
                      "extension": preview["extension"], "attempts": preview["attempts"],
                      "problems": [p for p in [None if thumbnail["png"] else "no thumbnail: " + thumbnail["qlmanage"],
                                               preview["problem"]] if p]})
-    crashes = wait_for_new_crashes(before, started[0])
+    crashes, capped = wait_for_new_crashes(before, started[0])
     for crash in crashes:
         i = bisect_right(started, crash["time"]) if crash["time"] is not None else 0
         crash["likely_file"] = rows[i - 1]["file"] if i else None
+    crashes_ok, crash_fields = crash_verdict(crashes, capped)
     unexercised = [row["file"] for row in rows if row["problems"]]
     retried = sum(row["attempts"] > 1 for row in rows)
     # Drills measured 6 retries in 3381 previews. More than this limit points at a new hang before preparePreviewOfFile.
     # It is tuned for the 23-file corpus in CI and lenient on large sweeps.
     retry_limit = 1 + len(rows) // 100
-    ok = not crashes and not unexercised and retried <= retry_limit
+    ok = crashes_ok and not unexercised and retried <= retry_limit
     if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
         try:
             with open(summary_path, "a") as summary:
                 summary.write(f"Hostile sweep {'passed' if ok else 'failed'}: {len(rows)} files, {len(crashes)} crashed, "
-                              f"{len(unexercised)} unexercised, {retried} retried (limit {retry_limit}).\n")
+                              f"{len(unexercised)} unexercised, {retried} retried (limit {retry_limit})"
+                              f"{f', crash wait capped at {CRASH_WAIT_CAP} s' if capped else ''}.\n")
         except OSError as error:
             note(f"cannot write the job summary: {error}")
     finish(run_dir, {"ok": ok, "via": args.via, "files": len(rows), "crashed": len(crashes), "unexercised": unexercised,
                      "retried": retried, "retry_limit": retry_limit,
-                     "new_crash_reports": readable(crashes), "results": rows})
+                     **crash_fields, "results": rows})
 
 
 def cmd_logs(args):
@@ -636,7 +649,7 @@ def main():
         command.add_argument("files", nargs="+", help="brush files or folders of them")
         command.add_argument("--settle", type=float, default=2, help="seconds to wait after the window appears")
     hostile = sub.add_parser("hostile", help="thumbnail and preview every file, "
-                             "fail on a crash, an unexercised file or too many retries")
+                             "fail on a crash, a capped crash-report wait, an unexercised file or too many retries")
     hostile.add_argument("paths", nargs="*", help=f"files or folders (default: the fixture corpus and ${REAL_FILES_ENV})")
     hostile.add_argument("--via", choices=sorted(DRIVERS), default="qlmanage", help="preview driver (default qlmanage)")
     hostile.add_argument("--settle", type=float, default=2, help="seconds to wait after the window appears")
