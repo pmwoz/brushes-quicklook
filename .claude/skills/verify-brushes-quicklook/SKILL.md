@@ -110,7 +110,10 @@ Proof standards:
   extension's own `beginning extension request` activity in the file's time
   window. A `log stream` started before the drive records it to
   `preview-requests.ndjson`, because `log show` loses it on a hosted runner. A
-  window that opened without that activity is reported as a problem.
+  window that opened without that activity is reported as a problem. When
+  qlmanage shows no window within 20 s, the CLI starts one new qlmanage and
+  notes the retry on stderr. The proof then names the last request in the
+  window, which is the one that drew it.
 - A thumbnail proof is the PNG. It must show the extension's drawing: the white
   card with the format badge or strip. A generic document icon means Quick
   Look did not use the extension.
