@@ -113,7 +113,10 @@ Proof standards:
   window that opened without that activity is reported as a problem. When
   qlmanage shows no window within 20 s, the CLI starts one new qlmanage and
   records `attempts: 2`. The proof then uses only the second attempt's time
-  window.
+  window. `hostile` counts those files in `retried` and fails when more than
+  `retry_limit` needed a second attempt. The limit is 1, or 1 per 100 files in
+  a larger sweep. Under GitHub Actions it appends that count line to the job
+  summary.
 - A thumbnail proof is the PNG. It must show the extension's drawing: the white
   card with the format badge or strip. A generic document icon means Quick
   Look did not use the extension.

@@ -95,7 +95,8 @@ Tests:
 the way a user does. `bql hostile` renders the thumbnail and the preview of
 every corpus file, and of the files in `$BQL_REAL_FILES` when it is set. It
 fails on any new crash report. CI installs the Release build and runs the
-corpus sweep. `bql --help` lists the other commands.
+corpus sweep. The job summary shows the sweep's file, crash, unexercised and
+retry counts. `bql --help` lists the other commands.
 
 ```
 cargo test --manifest-path ffi/Cargo.toml
