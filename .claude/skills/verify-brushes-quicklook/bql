@@ -229,30 +229,26 @@ def render_thumbnail(file, size, scale, out_dir):
 
 
 def preview_with_qlmanage(file, png, settle):
-    # On a hosted runner about 1 in 300 qlmanage runs never gets the extension's view: the extension starts its
-    # request but never receives preparePreviewOfFile, and qlmanage waits with no window. A new qlmanage recovers.
-    for attempt in (1, 2):
-        proc = subprocess.Popen(["qlmanage", "-p", str(file)], stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, start_new_session=True)
-        record = {"pid": proc.pid, "file": str(file)}
-        track("qlmanage", record)
+    proc = subprocess.Popen(["qlmanage", "-p", str(file)], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+    record = {"pid": proc.pid, "file": str(file)}
+    track("qlmanage", record)
+    try:
+        window = wait_for(lambda: next((w for w in windows() if w["pid"] == proc.pid and w["layer"] == 0
+                                        and w["bounds"]["Height"] > 100), None), timeout=20)
+        if window:
+            time.sleep(settle)
+            capture(window["id"], png)
+        return {"file": str(file), "png": str(png) if window else None,
+                "problem": None if window else "qlmanage opened no preview window within 20 s"}
+    finally:
+        proc.terminate()
         try:
-            window = wait_for(lambda: next((w for w in windows() if w["pid"] == proc.pid and w["layer"] == 0
-                                            and w["bounds"]["Height"] > 100), None), timeout=20)
-            if window:
-                time.sleep(settle)
-                capture(window["id"], png)
-                return {"file": str(file), "png": str(png), "problem": None}
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-            untrack("qlmanage", record)
-        note(f"qlmanage opened no preview window for {file.name} within 20 s (attempt {attempt} of 2)")
-    return {"file": str(file), "png": None, "problem": "qlmanage opened no preview window within 20 s, twice"}
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        untrack("qlmanage", record)
 
 
 def finder_panel():
@@ -320,13 +316,22 @@ def drive_previews(files, run_dir, settle, via):
             raise Fail("`log stream` printed nothing within 10 s", "Run `log stream` by hand to see why it fails.")
         results = []
         for file in files:
-            began = time.time()
-            result = DRIVERS[via](file, run_dir / "preview" / f"{file.name}.png", settle)
+            # On a hosted runner about 1 in 300 qlmanage runs never gets the extension's view: the extension starts
+            # its request but never receives preparePreviewOfFile, and qlmanage waits with no window. A new qlmanage
+            # recovers. Each attempt keeps its own time span, so the proof names the request of the attempt that drew.
+            attempts = 2 if via == "qlmanage" else 1
+            for attempt in range(1, attempts + 1):
+                began = time.time()
+                result = DRIVERS[via](file, run_dir / "preview" / f"{file.name}.png", settle)
+                if result["png"] or attempt == attempts:
+                    break
+                note(f"qlmanage opened no preview window for {file.name} within 20 s, starting a new one")
+            result["attempts"] = attempt
             results.append((began, time.time(), result))
 
         def served():
             requests = extension_requests(log)
-            return [next((process for at, process in reversed(requests) if began <= at <= ended), None)
+            return [next((process for at, process in requests if began <= at <= ended), None)
                     for began, ended, _ in results]
 
         # The stream writes an event a moment after it happens.
@@ -514,7 +519,7 @@ def cmd_hostile(args):
         thumbnail = render_thumbnail(file, 256, 1, run_dir / "thumb")
         preview = drive_previews([file], run_dir, args.settle, args.via)[0]
         rows.append({"file": str(file), "thumbnail_png": thumbnail["png"], "preview_png": preview["png"],
-                     "extension": preview["extension"],
+                     "extension": preview["extension"], "attempts": preview["attempts"],
                      "problems": [p for p in [None if thumbnail["png"] else "no thumbnail: " + thumbnail["qlmanage"],
                                               preview["problem"]] if p]})
     # A hosted runner wrote reports up to 25 s after the crash, so wait until none has arrived for 30 s.
