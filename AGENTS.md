@@ -29,5 +29,5 @@ C ABI crate that exposes `brushkit` to Swift. Format parsing fixes go to
 - Swift 6, strict concurrency, hardened runtime and App Sandbox on every
   target.
 - The extensions must never crash on a hostile file. Parse errors become a
-  visible error state in the preview and a badge-only thumbnail.
+  visible error state in the preview and a warning glyph in the thumbnail.
 - No conversion, editing or stroke simulation. This is a viewer.

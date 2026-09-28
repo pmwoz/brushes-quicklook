@@ -104,10 +104,10 @@ xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesPreviewTests -deri
 
 ## Installing a release
 
-Download the DMG from Releases, move the app to Applications and open it once.
-macOS registers the extensions on first launch. If Finder still shows generic
-icons, enable them under System Settings > General > Login Items & Extensions
-> Quick Look.
+There is no release yet. Issue #6 tracks the signed and notarized DMG. Until
+then, build and install from source with `scripts/install.sh`, described under
+Building. If Finder still shows generic icons, enable the extensions under
+System Settings > General > Login Items & Extensions > Quick Look.
 
 ## Decisions
 
