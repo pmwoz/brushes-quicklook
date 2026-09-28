@@ -107,8 +107,10 @@ Proof standards:
   an old build proves nothing about the change.
 - A preview proof is the PNG plus `extension.binary` under
   `/Applications/BrushesQuickLook.app`. The CLI matches it from the
-  extension's own `beginning extension request` log line in the file's time
-  window. A window that opened without that line is reported as a problem.
+  extension's own `beginning extension request` activity in the file's time
+  window. A `log stream` started before the drive records it to
+  `preview-requests.ndjson`, because `log show` loses it on a hosted runner. A
+  window that opened without that activity is reported as a problem.
 - A thumbnail proof is the PNG. It must show the extension's drawing: the white
   card with the format badge or strip. A generic document icon means Quick
   Look did not use the extension.
