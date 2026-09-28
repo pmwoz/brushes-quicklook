@@ -316,8 +316,17 @@ def drive_previews(files, run_dir, settle, via):
             raise Fail("`log stream` printed nothing within 10 s", "Run `log stream` by hand to see why it fails.")
         results = []
         for file in files:
-            began = time.time()
-            result = DRIVERS[via](file, run_dir / "preview" / f"{file.name}.png", settle)
+            # On a hosted runner about 1 in 300 qlmanage runs never gets the extension's view: the extension starts
+            # its request but never receives preparePreviewOfFile, and qlmanage waits with no window. A new qlmanage
+            # recovers. Each attempt keeps its own time span, so the proof names the request of the attempt that drew.
+            attempts = 2 if via == "qlmanage" else 1
+            for attempt in range(1, attempts + 1):
+                began = time.time()
+                result = DRIVERS[via](file, run_dir / "preview" / f"{file.name}.png", settle)
+                if result["png"] or attempt == attempts:
+                    break
+                note(f"qlmanage opened no preview window for {file.name} within 20 s, starting a new one")
+            result["attempts"] = attempt
             results.append((began, time.time(), result))
 
         def served():
@@ -510,7 +519,7 @@ def cmd_hostile(args):
         thumbnail = render_thumbnail(file, 256, 1, run_dir / "thumb")
         preview = drive_previews([file], run_dir, args.settle, args.via)[0]
         rows.append({"file": str(file), "thumbnail_png": thumbnail["png"], "preview_png": preview["png"],
-                     "extension": preview["extension"],
+                     "extension": preview["extension"], "attempts": preview["attempts"],
                      "problems": [p for p in [None if thumbnail["png"] else "no thumbnail: " + thumbnail["qlmanage"],
                                               preview["problem"]] if p]})
     # A hosted runner wrote reports up to 25 s after the crash, so wait until none has arrived for 30 s.
