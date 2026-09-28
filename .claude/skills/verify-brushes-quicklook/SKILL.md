@@ -124,7 +124,10 @@ Proof standards:
   right.
 - `new_crash_reports` must be empty. Reports are `Brushes*` files in
   `~/Library/Logs/DiagnosticReports`, and `hostile` names the likely file
-  for each one.
+  for each one. ReportCrash can write a report 25 s after the crash, so
+  `thumb`, `preview`, `finder` and `hostile` wait at the end until no new
+  report has arrived for 30 s, at most 120 s. The wait runs once per command,
+  so pass every file of a check to one command.
 - `qlmanage -p` hosts the same extension as Finder, with a `[DEBUG]` window
   title. When the change is about Finder behavior (panel size, the space-bar
   toggle, file switching), prove it with `bql finder`.
