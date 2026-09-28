@@ -54,7 +54,8 @@ Preconditions:
   It needs a real file that parses for longer than 10 s.
 - ReportCrash can write a report 25 s after the crash. `thumb`, `preview`, `finder`
   and `hostile` wait at the end until no new report has arrived for 30 s, at
-  most 120 s, then collect every new report.
+  most 120 s, then collect every new report. A wait that hits 120 s sets
+  `crash_wait_capped: true` and fails the run.
   `likely_file` is the last file that started before the `captureTime` in the
   report, so confirm it by rerunning `bql hostile <that file>`.
 - A crash from before the run does not count, even when its report arrives
