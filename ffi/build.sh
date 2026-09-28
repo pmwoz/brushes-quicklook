@@ -1,8 +1,6 @@
 #!/bin/sh
 set -eu
 
-# Xcode.app started from the Dock passes no user PATH. These are the rustup.rs and Homebrew install locations.
-export PATH="$PATH:$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:/usr/local/opt/rustup/bin"
 export MACOSX_DEPLOYMENT_TARGET
 cd "$(dirname "$0")/.."
 
