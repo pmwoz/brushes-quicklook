@@ -535,8 +535,20 @@ def cmd_hostile(args):
         i = bisect_right(started, crash["time"]) if crash["time"] is not None else 0
         crash["likely_file"] = rows[i - 1]["file"] if i else None
     unexercised = [row["file"] for row in rows if row["problems"]]
-    finish(run_dir, {"ok": not crashes and not unexercised, "via": args.via, "files": len(rows),
-                     "crashed": len(crashes), "unexercised": unexercised,
+    retried = sum(row["attempts"] > 1 for row in rows)
+    # Drills measured 6 retries in 3381 previews. More than this limit points at a new hang before preparePreviewOfFile.
+    # It is tuned for the 23-file corpus in CI and lenient on large sweeps.
+    retry_limit = 1 + len(rows) // 100
+    ok = not crashes and not unexercised and retried <= retry_limit
+    if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
+        try:
+            with open(summary_path, "a") as summary:
+                summary.write(f"Hostile sweep {'passed' if ok else 'failed'}: {len(rows)} files, {len(crashes)} crashed, "
+                              f"{len(unexercised)} unexercised, {retried} retried (limit {retry_limit}).\n")
+        except OSError as error:
+            note(f"cannot write the job summary: {error}")
+    finish(run_dir, {"ok": ok, "via": args.via, "files": len(rows), "crashed": len(crashes), "unexercised": unexercised,
+                     "retried": retried, "retry_limit": retry_limit,
                      "new_crash_reports": readable(crashes), "results": rows})
 
 
@@ -618,7 +630,8 @@ def main():
         command = sub.add_parser(name, help=help_text)
         command.add_argument("files", nargs="+", help="brush files or folders of them")
         command.add_argument("--settle", type=float, default=2, help="seconds to wait after the window appears")
-    hostile = sub.add_parser("hostile", help="thumbnail and preview every file, fail on any new crash report")
+    hostile = sub.add_parser("hostile", help="thumbnail and preview every file, "
+                             "fail on a crash, an unexercised file or too many retries")
     hostile.add_argument("paths", nargs="*", help=f"files or folders (default: the fixture corpus and ${REAL_FILES_ENV})")
     hostile.add_argument("--via", choices=sorted(DRIVERS), default="qlmanage", help="preview driver (default qlmanage)")
     hostile.add_argument("--settle", type=float, default=2, help="seconds to wait after the window appears")
