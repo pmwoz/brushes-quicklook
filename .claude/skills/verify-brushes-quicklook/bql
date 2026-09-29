@@ -162,11 +162,18 @@ def capture_time(report):
         return None
 
 
+def run_crashes(before, since):
+    crashes = [{"report": str(path), "process": re.split(r"[-_.]", name)[0], "time": capture_time(path)}
+               for name, path in sorted(crash_reports().items()) if name not in before]
+    return [crash for crash in crashes if crash["time"] is None or crash["time"] >= since]
+
+
 def wait_for_new_crashes(before, since):
-    # A hosted runner wrote reports up to 25 s after the crash, so wait until none has arrived for 30 s.
-    # Crashes outside the run can keep reports coming, so stop at the cap.
+    # A hosted runner wrote reports up to 25 s after the crash, so wait until none from the run has arrived for 30 s.
+    # Crashes can keep reports coming, so stop at the cap.
     note("waiting for crash reports")
-    reports, quiet_since = crash_reports(), time.time()
+    crashes, quiet_since = run_crashes(before, since), time.time()
+    seen = {crash["report"] for crash in crashes}
     deadline = quiet_since + CRASH_WAIT_CAP
     capped = False
     while time.time() - quiet_since < 30:
@@ -175,12 +182,12 @@ def wait_for_new_crashes(before, since):
             capped = True
             break
         time.sleep(1)
-        latest = crash_reports()
-        if latest.keys() != reports.keys():
-            reports, quiet_since = latest, time.time()
-    crashes = [{"report": str(path), "process": re.split(r"[-_.]", name)[0], "time": capture_time(path)}
-               for name, path in sorted(reports.items()) if name not in before]
-    return [crash for crash in crashes if crash["time"] is None or crash["time"] >= since], capped
+        crashes = run_crashes(before, since)
+        arrived = {crash["report"] for crash in crashes} - seen
+        if arrived:
+            seen |= arrived
+            quiet_since = time.time()
+    return crashes, capped
 
 
 def readable(crashes):

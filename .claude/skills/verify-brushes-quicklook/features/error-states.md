@@ -44,8 +44,9 @@ Preconditions:
   and `retried` at most `retry_limit` across all 23 corpus files. With `BQL_REAL_FILES` set, the sweep includes those files too.
 - **Proof.** The PNGs and the `result.json` of the `hostile` run. The run is
   proven to fail: a `SIGSEGV` sent to its own extension process gave exit 1
-  and one report with `likely_file`. A new `Brushes*` report written every
-  10 s during the wait gave exit 1 with `crash_wait_capped: true`.
+  and one report with `likely_file`. A new `Brushes*` report with a
+  `captureTime` inside the run, written every 10 s during the wait, gave exit 1
+  with `crash_wait_capped: true`.
 
 ## Gotchas
 
@@ -54,10 +55,12 @@ Preconditions:
 - The time-out state ("Previewing took longer than 10 seconds.") has no fixture.
   It needs a real file that parses for longer than 10 s.
 - ReportCrash can write a report 25 s after the crash. `thumb`, `preview`, `finder`
-  and `hostile` wait at the end until no new report has arrived for 30 s, at
-  most 120 s, then collect every new report. A wait that reaches 120 s
-  without 30 quiet seconds sets `crash_wait_capped: true` and fails the run.
+  and `hostile` wait at the end until no new report from the run has arrived for
+  30 s, at most 120 s, then collect every new report from the run. A wait that
+  reaches 120 s without 30 quiet seconds sets `crash_wait_capped: true` and
+  fails the run.
   `likely_file` is the last file that started before the `captureTime` in the
   report, so confirm it by rerunning `bql hostile <that file>`.
 - A crash from before the run does not count, even when its report arrives
-  during the run. Only new `Brushes*` reports fail the run.
+  during the run. Its report and a deleted report do not restart the 30 s
+  wait. Only new `Brushes*` reports from the run fail it.
