@@ -76,6 +76,12 @@ class WaitForNewCrashesTest(unittest.TestCase):
         self.assertEqual((elapsed, capped), (40, False))
         self.assertEqual([crash["report"] for crash in crashes], [str(self.written[0])])
 
+    def test_a_report_with_no_readable_capture_time_is_returned_and_restarts_the_quiet_window_once(self):
+        path = self.dir / "BrushesPreview-unreadable.ips"
+        elapsed, capped, crashes, _ = self.wait(lambda now: path.exists() or path.write_text("{}"))
+        self.assertEqual((elapsed, capped), (40, False))
+        self.assertEqual(crashes, [{"report": str(path), "process": "BrushesPreview", "time": None}])
+
     def test_reports_from_the_run_that_keep_arriving_hit_the_cap(self):
         elapsed, capped, crashes, _ = self.wait(self.write_report)
         self.assertTrue(capped)
