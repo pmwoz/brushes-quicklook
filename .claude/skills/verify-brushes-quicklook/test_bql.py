@@ -1,8 +1,10 @@
 import importlib.machinery
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -80,6 +82,27 @@ class WaitForNewCrashesTest(unittest.TestCase):
                 self.write_report(now)
         _, capped, crashes, vanished = self.wait(write_or_delete)
         self.assertEqual((capped, crashes, vanished), (True, [], set(map(str, self.written))))
+
+
+class ArgumentErrorTest(unittest.TestCase):
+    def run_bql(self, *argv):
+        stdout = io.StringIO()
+        with mock.patch("sys.argv", ["bql", *argv]), redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as exit:
+                bql.main()
+        return exit.exception.code, json.loads(stdout.getvalue())
+
+    def test_a_subcommand_argument_error_prints_json_naming_its_help(self):
+        code, result = self.run_bql("thumb")
+        self.assertEqual((code, result["ok"]), (2, False))
+        self.assertIn("files", result["error"])
+        self.assertIn("bql thumb --help", result["fix"])
+
+    def test_a_top_level_argument_error_prints_json_naming_its_help(self):
+        code, result = self.run_bql("nope")
+        self.assertEqual((code, result["ok"]), (2, False))
+        self.assertIn("nope", result["error"])
+        self.assertIn("bql --help", result["fix"])
 
 
 if __name__ == "__main__":
