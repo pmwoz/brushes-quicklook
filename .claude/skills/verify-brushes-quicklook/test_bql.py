@@ -198,8 +198,9 @@ class ExitContractTest(unittest.TestCase):
                 return SimpleNamespace(stdout="" if kind == unregistered else line)
             if args[0] == "git":
                 return SimpleNamespace(stdout="project.yml\n")
-            if args[0] == bql.LSREGISTER and other_copy:
-                return SimpleNamespace(stdout=f"    path:    {base}/Other/BrushesQuickLook.app (0x1)\n")
+            if args[0] == bql.LSREGISTER:
+                copies = [app, base / "Other/BrushesQuickLook.app"] if other_copy else [app]
+                return SimpleNamespace(stdout="".join(f"    path:    {copy} (0x1)\n" for copy in copies))
             return SimpleNamespace(stdout="")
         return {"REPO": base, "APP": app, "BUILD": build, "run": run, "cdhash": lambda path: hashes[str(path)]}
 
@@ -245,11 +246,12 @@ class ExitContractTest(unittest.TestCase):
         rows += [(("doctor",), f"cdhash-{kind} failed", self.doctor(mismatched=kind))
                  for kind in ("app", "preview", "thumbnail")]
         rows += [(("doctor",), f"pluginkit-{kind} failed", self.doctor(unregistered=kind)) for kind in bql.PLUGINS]
+        fragments = {error for _, error, _ in rows}
         for argv, error, stubs in rows:
             with self.subTest(command=argv[0], error=error):
                 code, result = run_bql(*argv, **self.stubs, **stubs)
                 self.assertEqual((code, result["ok"], bool(result.get("fix"))), (1, False, True))
-                self.assertIn(error, result.get("error", ""))
+                self.assertEqual({f for f in fragments if f in result.get("error", "")}, {error})
 
     def test_a_run_with_several_causes_lists_each_error_and_fix(self):
         code, result = run_bql("thumb", self.brush, **self.stubs, wait_for_new_crashes=crash_wait(crashed=True),
@@ -273,10 +275,12 @@ class ExitContractTest(unittest.TestCase):
                 code, result = run_bql(*argv, **self.stubs, **stubs)
                 self.assertEqual((code, result["ok"], "error" in result, "fix" in result), (0, True, False, False))
 
-    def test_a_doctor_warning_does_not_fail_the_run(self):
-        code, result = run_bql("doctor", **self.doctor(other_copy=True))
-        self.assertEqual((code, result["ok"], "error" in result, "fix" in result), (0, True, False, False))
-        self.assertIn("warn", [check["status"] for check in result["checks"]])
+    def test_a_doctor_run_with_no_failed_check_exits_0(self):
+        for other_copy, not_ok in ((False, {}), (True, {"launchservices": "warn"})):
+            with self.subTest(other_copy=other_copy):
+                code, result = run_bql("doctor", **self.doctor(other_copy=other_copy))
+                self.assertEqual((code, result["ok"], "error" in result, "fix" in result), (0, True, False, False))
+                self.assertEqual({c["check"]: c["status"] for c in result["checks"] if c["status"] != "ok"}, not_ok)
 
     def test_a_missing_file_exits_2_with_error_and_fix(self):
         code, result = run_bql("thumb", self.dir / "missing.abr")
