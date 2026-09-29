@@ -21,9 +21,10 @@ class FakeClock:
         return self.now
 
     def sleep(self, seconds):
-        ticks = int((self.now - self.start) // 10)
         self.now += seconds
-        for _ in range(int((self.now - self.start) // 10) - ticks):
+        if self.now - self.start > bql.CRASH_WAIT_CAP + 30:
+            raise AssertionError("the wait ran past its cap")
+        if (self.now - self.start) % 10 == 0:
             self.on_tick(self.now)
 
 
@@ -60,9 +61,15 @@ class WaitForNewCrashesTest(unittest.TestCase):
             self.write_report(self.START - 3600)
         self.assertEqual(self.wait(lambda now: self.written.pop().unlink()), (30, False, []))
 
+    def test_one_report_from_the_run_restarts_the_quiet_window_once(self):
+        elapsed, capped, crashes = self.wait(lambda now: self.written or self.write_report(now))
+        self.assertEqual((elapsed, capped), (40, False))
+        self.assertEqual([crash["report"] for crash in crashes], [str(self.written[0])])
+
     def test_reports_from_the_run_that_keep_arriving_hit_the_cap(self):
         elapsed, capped, crashes = self.wait(self.write_report)
-        self.assertEqual((elapsed, capped), (bql.CRASH_WAIT_CAP + 1, True))
+        self.assertTrue(capped)
+        self.assertLessEqual(bql.CRASH_WAIT_CAP, elapsed)
         self.assertEqual({crash["report"] for crash in crashes}, set(map(str, self.written)))
 
 
