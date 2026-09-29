@@ -183,6 +183,7 @@ def wait_for_new_crashes(before, since):
     note("waiting for crash reports")
     crashes, quiet_since = run_crashes(before, since), time.time()
     seen = {crash["report"] for crash in crashes}
+    restarted = set()
     deadline = quiet_since + CRASH_WAIT_CAP
     capped = False
     while time.time() - quiet_since < 30:
@@ -195,8 +196,9 @@ def wait_for_new_crashes(before, since):
         arrived = {crash["report"] for crash in crashes} - seen
         if arrived:
             seen |= arrived
+            restarted |= arrived
             quiet_since = time.time()
-    return crashes, capped, seen - {crash["report"] for crash in crashes}
+    return crashes, capped, restarted - {crash["report"] for crash in crashes}
 
 
 def readable(crashes):
@@ -211,9 +213,9 @@ def crash_verdict(crashes, capped, vanished):
                          "Open each report in `new_crash_reports`, find the crashing frame and fix it. "
                          "The extensions must never crash on a hostile file."))
     if capped and vanished:
-        failures.append((f"{len(vanished)} Brushes crash reports restarted the crash wait until its {CRASH_WAIT_CAP} s cap, "
-                         "then were deleted or finished writing with a captureTime before the run, "
-                         "so a crash from this run may be missing",
+        failures.append((f"Brushes crash reports that restarted the crash wait until its {CRASH_WAIT_CAP} s cap, "
+                         f"then were deleted or finished writing with a captureTime before the run: {len(vanished)}. "
+                         "A crash from this run may be missing",
                          "Stop whatever deletes Brushes* reports in ~/Library/Logs/DiagnosticReports during a run, "
                          "or wait until ReportCrash stops writing reports of earlier crashes, and rerun."))
     elif capped:
