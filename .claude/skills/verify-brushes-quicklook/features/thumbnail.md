@@ -3,8 +3,8 @@
 Finder icon view and column view show a brush file as a white card. The card holds its
 first brush tips and a format badge: blue `ABR` for Photoshop and orange
 `BRUSH` or `BRUSHSET` for Procreate. Small icons swap the badge for a coloured
-strip. Files with no drawable tip show a brush glyph. Unreadable files show a
-warning glyph.
+strip. Files with no drawable tip, and files too large or too slow to load,
+show a brush glyph. Unreadable files show a warning glyph.
 
 ## Sub-features
 
@@ -12,7 +12,7 @@ warning glyph.
 - `thumb-single` shows one tip when the file has one to three drawable tips, or at any size below 64 pt.
 - `thumb-badge` shows the format pill at 64 pt and up.
 - `thumb-strip` replaces the pill with a coloured strip along the bottom edge below 64 pt.
-- `thumb-no-tips` shows a brush glyph for a file that parses but has no drawable tip.
+- `thumb-no-tips` shows a brush glyph for a file that parses with no drawable tip, a file above 512 MB, or a file that loads no brush within 5 s.
 - `thumb-unreadable` shows a warning glyph for a damaged file.
 
 ## How to get to it (user POV)
@@ -32,7 +32,8 @@ Preconditions:
 - **Strip.** Run `bql thumb $F/ordered_set.brushset --size 48`. The 48×48 PNG shows
   the tip with an orange strip along the bottom and no text.
 - **No tips.** Run `bql thumb $F/missing_shape.brush $F/wellformed_v6_min.abr $F/bad_shapes.brushset --size 256`.
-  Each PNG shows a grey brush glyph over the badge.
+  Each PNG shows a grey brush glyph over the badge. The 600 MB file from the
+  Too large recipe in [error-states.md](./error-states.md) shows the same glyph.
 - **Unreadable.** Run `bql thumb $F/v2_rle_overflow.abr $F/deep_metadata.brushset --size 256`.
   Each PNG shows a grey warning triangle over the badge.
 - **Zero-area tip skipped.** Run `bql thumb $F/zero_area_tip.abr --size 256`. The PNG
