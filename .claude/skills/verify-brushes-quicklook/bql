@@ -704,7 +704,9 @@ def main():
     logs = sub.add_parser("logs", help="per-load read/parse/tips intervals and extension log messages from the unified log")
     logs.add_argument("--last", type=float, default=300, help="seconds of log to read (default 300)")
     sub.add_parser("cleanup", help="kill the qlmanage and Finder windows bql started, delete fixtures, keep evidence")
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
+    if extra:
+        sub.choices[args.command].error(f"unrecognized arguments: {' '.join(extra)}")
     if args.command == "thumb" and not args.size:
         args.size = [256, 48]
     try:
