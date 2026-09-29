@@ -60,6 +60,12 @@ class WaitForNewCrashesTest(unittest.TestCase):
     def test_reports_from_before_the_run_do_not_restart_the_quiet_window(self):
         self.assertEqual(self.wait(lambda now: self.write_report(self.START - 3600)), (30, False, [], set()))
 
+    def test_reports_present_before_the_wait_are_not_returned(self):
+        # A captureTime inside the run passes the time filter, so only the before filter can drop this report.
+        self.write_report(self.START + 5)
+        (self.dir / "BrushesThumbnail-unreadable.ips").write_text("{}")
+        self.assertEqual(self.wait(lambda now: None), (30, False, [], set()))
+
     def test_deleted_reports_do_not_restart_the_quiet_window(self):
         for _ in range(20):
             self.write_report(self.START - 3600)
