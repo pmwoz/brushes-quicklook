@@ -12,6 +12,7 @@ size and format.
 - `preview-header-named` uses the set name as the title when it differs from the file name, with the count and format below.
 - `preview-header-count` uses the count as the title when the set has no name of its own.
 - `preview-single` shows one large tip with name, size and format for a one-brush file.
+- `preview-set-line` adds `Set: <name>` below the format when a one-brush set has a name that differs from the brush name.
 - `preview-size` shows `W × H px` when the source size is known and `Size unknown` otherwise.
 - `preview-small-tip` keeps small tips crisp by never scaling past 2 pt per source pixel.
 - `preview-order` keeps brushes in file order, not sorted by name.
@@ -52,5 +53,9 @@ Preconditions:
   reads "Loading brushes…" means the settle time was too short, not that the preview failed.
 - Finder's panel shows an "Open with" button for whichever app owns the
   extension on that Mac. It is not part of the extension.
+- `bql` cannot resize the panel, so `preview-grid` gaining columns is a manual
+  check: resize Finder's panel on a real multi-brush file.
+- No corpus file has a one-brush set with its own name, so `preview-set-line`
+  has no fixture.
 - The ABR fixtures `wellformed_v6_min`, `wellformed_v6_patt` and `patt_*` parse
   to `0 brushes`. They check that nothing breaks, not the grid.

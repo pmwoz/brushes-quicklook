@@ -32,9 +32,11 @@ Preconditions:
   `osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID))).find(w => w.kCGWindowOwnerName === "BrushesQuickLook").kCGWindowNumber'`.
   Then run `screencapture -x -o -l <id> build.noindex/verify/evidence/host-app.png`. The PNG shows
   "Brushes Quick Look" and both instruction lines.
-- **Types.** Run any `bql thumb` recipe from [thumbnail.md](./thumbnail.md). A
-  badge card instead of a generic icon proves Quick Look resolved the type to
-  the extension.
+- **Types.** Run the `bql thumb` recipes from [thumbnail.md](./thumbnail.md) and
+  the `bql preview` recipes from [preview.md](./preview.md) across `.abr`,
+  `.brush` and `.brushset` files. A card with a badge or strip instead of a
+  generic icon, and a preview result with `extension.binary`, prove Quick Look
+  resolved each type to both extensions.
 - **Proof.** The install JSON, the doctor JSON and the window PNG.
 
 ## Gotchas
