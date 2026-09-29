@@ -88,9 +88,9 @@ class ArgumentErrorTest(unittest.TestCase):
     def run_bql(self, *argv):
         stdout = io.StringIO()
         with mock.patch("sys.argv", ["bql", *argv]), redirect_stdout(stdout), redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit) as exit:
+            with self.assertRaises(SystemExit) as raised:
                 bql.main()
-        return exit.exception.code, json.loads(stdout.getvalue())
+        return raised.exception.code, json.loads(stdout.getvalue())
 
     def test_a_subcommand_argument_error_prints_json_naming_its_help(self):
         code, result = self.run_bql("thumb")
@@ -103,6 +103,12 @@ class ArgumentErrorTest(unittest.TestCase):
         self.assertEqual((code, result["ok"]), (2, False))
         self.assertIn("nope", result["error"])
         self.assertIn("bql --help", result["fix"])
+
+    def test_an_unknown_option_after_a_subcommand_names_the_subcommand_help(self):
+        code, result = self.run_bql("thumb", "x", "--bogus")
+        self.assertEqual((code, result["ok"]), (2, False))
+        self.assertIn("--bogus", result["error"])
+        self.assertIn("bql thumb --help", result["fix"])
 
 
 if __name__ == "__main__":
