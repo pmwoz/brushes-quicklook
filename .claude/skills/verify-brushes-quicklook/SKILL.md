@@ -18,8 +18,10 @@ All commands go through one CLI. Run it from the repo root:
 
 The examples below call it `bql`. Each subcommand prints one JSON object on
 stdout. Exit 0 is ok, 1 is a failed check, 2 means the command could not run.
-On 1 and 2 the JSON has `error` and `fix` or per-item `problem` fields that say
-what to do. Progress lines go to stderr.
+On 1 and 2 the JSON has top-level `error` and `fix` fields that say what failed
+and what to do. When a run fails for several reasons, both fields list each
+one. Per-item fields such as `problem` give the detail. Progress lines go to
+stderr.
 
 ## Launch
 

@@ -127,11 +127,13 @@ def new_run(command):
     return directory
 
 
-def finish(run_dir, result):
-    ok = result["ok"]
-    result = {"ok": ok, "evidence_dir": str(run_dir), **{k: v for k, v in result.items() if k != "ok"}}
+def finish(run_dir, result, failures):
+    """Each failure is an (error, fix) pair. The run passes when there are none."""
+    result = {"ok": not failures, "evidence_dir": str(run_dir), **result}
+    if failures:
+        result |= {"error": ". ".join(error for error, _ in failures), "fix": " ".join(fix for _, fix in failures)}
     (run_dir / "result.json").write_text(json.dumps(result, indent=2, default=str))
-    emit(result, 0 if ok else 1)
+    emit(result, 1 if failures else 0)
 
 
 def brush_files(paths):
@@ -196,13 +198,17 @@ def readable(crashes):
 
 
 def crash_verdict(crashes, capped):
-    fields = {"new_crash_reports": readable(crashes), "crash_wait_capped": capped}
-    if capped and not crashes:
-        fields |= {"error": f"Brushes crash reports kept arriving until the {CRASH_WAIT_CAP} s wait ended, "
-                            "so a crash from this run may be missing",
-                   "fix": "Find what keeps writing Brushes* reports to ~/Library/Logs/DiagnosticReports, "
-                          "wait until they stop, and rerun."}
-    return not crashes and not capped, fields
+    failures = []
+    if crashes:
+        failures.append((f"Brushes crash reports from this run: {len(crashes)}",
+                         "Open each report in `new_crash_reports`, find the crashing frame and fix it. "
+                         "The extensions must never crash on a hostile file."))
+    elif capped:
+        failures.append((f"Brushes crash reports kept arriving until the {CRASH_WAIT_CAP} s wait ended, "
+                         "so a crash from this run may be missing",
+                         "Find what keeps writing Brushes* reports to ~/Library/Logs/DiagnosticReports, "
+                         "wait until they stop, and rerun."))
+    return failures, {"new_crash_reports": readable(crashes), "crash_wait_capped": capped}
 
 
 def windows():
@@ -446,9 +452,11 @@ def cmd_doctor(args):
                   f"This {name} process runs an older binary and keeps serving requests. Run `kill {pid}`; "
                   "Quick Look starts a fresh one on the next request." if stale else None)
 
-    ok = all(c["status"] != "fail" for c in checks)
-    emit({"ok": ok, "repo": str(REPO), "installed_app": str(APP), "release_build": str(BUILD), "checks": checks},
-         0 if ok else 1)
+    failed = [c["check"] for c in checks if c["status"] == "fail"]
+    emit({"ok": not failed, "repo": str(REPO), "installed_app": str(APP), "release_build": str(BUILD), "checks": checks,
+          **({"error": f"Failed checks: {', '.join(failed)}",
+              "fix": "Apply the `fix` of each failed check, then rerun `bql doctor`."} if failed else {})},
+         1 if failed else 0)
 
 
 def cmd_install(args):
@@ -515,8 +523,12 @@ def cmd_thumb(args):
     run_dir = new_run("thumb")
     before, since = crash_reports(), time.time()
     results = [render_thumbnail(f, size, args.scale, run_dir / "thumb") for f in files for size in args.size]
-    crashes_ok, crash_fields = crash_verdict(*wait_for_new_crashes(before, since))
-    finish(run_dir, {"ok": all(r["png"] for r in results) and crashes_ok, "results": results, **crash_fields})
+    failures, crash_fields = crash_verdict(*wait_for_new_crashes(before, since))
+    if missing := sum(not r["png"] for r in results):
+        failures.append((f"qlmanage wrote no thumbnail for {missing} of {len(results)} renders",
+                         "Read the `qlmanage` field of each result with no `png`. "
+                         "Run `bql doctor` to check that the thumbnail extension is installed and registered."))
+    finish(run_dir, {"results": results, **crash_fields}, failures)
 
 
 def cmd_preview(args, via="qlmanage"):
@@ -524,8 +536,11 @@ def cmd_preview(args, via="qlmanage"):
     run_dir = new_run(args.command)
     before, since = crash_reports(), time.time()
     results = drive_previews(files, run_dir, args.settle, via)
-    crashes_ok, crash_fields = crash_verdict(*wait_for_new_crashes(before, since))
-    finish(run_dir, {"ok": not any(r["problem"] for r in results) and crashes_ok, "results": results, **crash_fields})
+    failures, crash_fields = crash_verdict(*wait_for_new_crashes(before, since))
+    if problems := sum(bool(r["problem"]) for r in results):
+        failures.append((f"{problems} of {len(results)} previews have a problem",
+                         "Read the `problem` field of each result and run `bql doctor`, then rerun those files."))
+    finish(run_dir, {"results": results, **crash_fields}, failures)
 
 
 def cmd_finder(args):
@@ -557,13 +572,21 @@ def cmd_hostile(args):
     for crash in crashes:
         i = bisect_right(started, crash["time"]) if crash["time"] is not None else 0
         crash["likely_file"] = rows[i - 1]["file"] if i else None
-    crashes_ok, crash_fields = crash_verdict(crashes, capped)
+    failures, crash_fields = crash_verdict(crashes, capped)
     unexercised = [row["file"] for row in rows if row["problems"]]
+    if unexercised:
+        failures.append((f"{len(unexercised)} of {len(rows)} files were not exercised",
+                         "Read the `problems` of each file in `unexercised` under `results`. "
+                         "Run `bql doctor` to check that both extensions are installed and registered."))
     retried = sum(row["attempts"] > 1 for row in rows)
     # Drills measured 6 retries in 3381 previews. More than this limit points at a new hang before preparePreviewOfFile.
     # It is tuned for the 23-file corpus in CI and lenient on large sweeps.
     retry_limit = 1 + len(rows) // 100
-    ok = crashes_ok and not unexercised and retried <= retry_limit
+    if retried > retry_limit:
+        failures.append((f"{retried} files needed a second qlmanage attempt, above the limit of {retry_limit}",
+                         "Rerun the files with `attempts: 2` through `bql preview`. If they need a second attempt "
+                         "again, the preview extension hangs before preparePreviewOfFile. Read `bql logs` for them."))
+    ok = not failures
     if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
         try:
             with open(summary_path, "a") as summary:
@@ -572,9 +595,9 @@ def cmd_hostile(args):
                               f"{f', crash wait capped at {CRASH_WAIT_CAP} s' if capped else ''}.\n")
         except OSError as error:
             note(f"cannot write the job summary: {error}")
-    finish(run_dir, {"ok": ok, "via": args.via, "files": len(rows), "crashed": len(crashes), "unexercised": unexercised,
+    finish(run_dir, {"via": args.via, "files": len(rows), "crashed": len(crashes), "unexercised": unexercised,
                      "retried": retried, "retry_limit": retry_limit,
-                     **crash_fields, "results": rows})
+                     **crash_fields, "results": rows}, failures)
 
 
 def cmd_logs(args):
