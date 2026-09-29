@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 from bisect import bisect_right
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -127,11 +128,17 @@ def new_run(command):
     return directory
 
 
-def finish(run_dir, result, failures):
-    """Each failure is an (error, fix) pair. The run passes when there are none."""
-    result = {"ok": not failures, "evidence_dir": str(run_dir), **result}
+def verdict(result, failures):
+    """Each failure is an (error, fix) pair. The result passes when there are none."""
+    result = {"ok": not failures, **result}
     if failures:
-        result |= {"error": ". ".join(error for error, _ in failures), "fix": " ".join(fix for _, fix in failures)}
+        result |= {"error": ". ".join(error for error, _ in failures),
+                   "fix": " ".join(dict.fromkeys(fix for _, fix in failures))}
+    return result
+
+
+def finish(run_dir, result, failures):
+    result = verdict({"evidence_dir": str(run_dir), **result}, failures)
     (run_dir / "result.json").write_text(json.dumps(result, indent=2, default=str))
     emit(result, 1 if failures else 0)
 
@@ -203,7 +210,7 @@ def crash_verdict(crashes, capped):
         failures.append((f"Brushes crash reports from this run: {len(crashes)}",
                          "Open each report in `new_crash_reports`, find the crashing frame and fix it. "
                          "The extensions must never crash on a hostile file."))
-    elif capped:
+    if capped:
         failures.append((f"Brushes crash reports kept arriving until the {CRASH_WAIT_CAP} s wait ended, "
                          "so a crash from this run may be missing",
                          "Find what keeps writing Brushes* reports to ~/Library/Logs/DiagnosticReports, "
@@ -452,11 +459,9 @@ def cmd_doctor(args):
                   f"This {name} process runs an older binary and keeps serving requests. Run `kill {pid}`; "
                   "Quick Look starts a fresh one on the next request." if stale else None)
 
-    failed = [c["check"] for c in checks if c["status"] == "fail"]
-    emit({"ok": not failed, "repo": str(REPO), "installed_app": str(APP), "release_build": str(BUILD), "checks": checks,
-          **({"error": f"Failed checks: {', '.join(failed)}",
-              "fix": "Apply the `fix` of each failed check, then rerun `bql doctor`."} if failed else {})},
-         1 if failed else 0)
+    failures = [(f"{c['check']} failed", c["fix"]) for c in checks if c["status"] == "fail"]
+    emit(verdict({"repo": str(REPO), "installed_app": str(APP), "release_build": str(BUILD), "checks": checks},
+                 failures), 1 if failures else 0)
 
 
 def cmd_install(args):
@@ -584,8 +589,8 @@ def cmd_hostile(args):
     retry_limit = 1 + len(rows) // 100
     if retried > retry_limit:
         failures.append((f"{retried} files needed a second qlmanage attempt, above the limit of {retry_limit}",
-                         "Rerun the files with `attempts: 2` through `bql preview`. If they need a second attempt "
-                         "again, the preview extension hangs before preparePreviewOfFile. Read `bql logs` for them."))
+                         "Rerun the files whose result has `attempts: 2` through `bql preview`. If `attempts` is 2 "
+                         "again, the preview extension hangs before preparePreviewOfFile. Read `bql logs` right after."))
     ok = not failures
     if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
         try:
@@ -693,6 +698,10 @@ def main():
         globals()[f"cmd_{args.command}"](args)
     except Fail as failure:
         emit({"ok": False, "error": failure.error, "fix": failure.fix}, 2)
+    except Exception as error:
+        traceback.print_exc()
+        emit({"ok": False, "error": f"{type(error).__name__}: {error}",
+              "fix": "bql hit an unexpected error or a hung system command. Read the traceback on stderr."}, 2)
 
 
 if __name__ == "__main__":
