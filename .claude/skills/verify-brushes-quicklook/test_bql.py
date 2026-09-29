@@ -66,6 +66,12 @@ class WaitForNewCrashesTest(unittest.TestCase):
         (self.dir / "BrushesThumbnail-unreadable.ips").write_text("{}")
         self.assertEqual(self.wait(lambda now: None), (30, False, [], set()))
 
+    def test_a_report_from_the_run_present_when_the_wait_starts_is_returned_and_does_not_restart_the_quiet_window(self):
+        self.write_report(self.START + 5)
+        elapsed, capped, crashes, vanished = self.wait(lambda now: None, before={})
+        self.assertEqual((elapsed, capped, vanished), (30, False, set()))
+        self.assertEqual([crash["report"] for crash in crashes], [str(self.written[0])])
+
     def test_deleted_reports_do_not_restart_the_quiet_window(self):
         for _ in range(20):
             self.write_report(self.START - 3600)
