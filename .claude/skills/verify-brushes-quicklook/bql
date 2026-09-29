@@ -81,6 +81,12 @@ def emit(result, code=0):
     sys.exit(code)
 
 
+class ArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        emit({"ok": False, "error": f"{self.prog}: {message}", "fix": f"Run `{self.prog} --help` for the arguments."}, 2)
+
+
 def note(message):
     print(message, file=sys.stderr, flush=True)
 
@@ -673,7 +679,7 @@ def cmd_cleanup(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         prog="bql", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Typical run: bql doctor; bql fixtures; bql thumb <file>; bql preview <file>; bql cleanup")
     sub = parser.add_subparsers(dest="command", required=True)
