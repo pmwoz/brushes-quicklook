@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7
+      - name: Test bql
+        run: python3 -m unittest discover -s .claude/skills/verify-brushes-quicklook -p 'test_*.py' -v
       - name: Install pinned Rust toolchain
         run: rustup toolchain install --no-self-update
       - name: Build FFI with Xcode GUI environment
