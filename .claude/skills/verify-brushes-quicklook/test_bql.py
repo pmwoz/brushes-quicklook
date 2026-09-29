@@ -50,10 +50,10 @@ class WaitForNewCrashesTest(unittest.TestCase):
         path.write_text(json.dumps({"app_name": "BrushesPreview"}) + "\n" + json.dumps({"captureTime": stamp}))
         self.written.append(path)
 
-    def wait(self, on_tick):
+    def wait(self, on_tick, before=None):
         clock = FakeClock(self.START, on_tick)
         with mock.patch.object(bql, "time", clock):
-            before = bql.crash_reports()
+            before = bql.crash_reports() if before is None else before
             crashes, capped, vanished = bql.wait_for_new_crashes(before, clock.now)
         return clock.now - self.START, capped, crashes, vanished
 
@@ -90,6 +90,30 @@ class WaitForNewCrashesTest(unittest.TestCase):
                 self.write_report(now)
         _, capped, crashes, vanished = self.wait(write_or_delete)
         self.assertEqual((capped, crashes, vanished), (True, [], set(map(str, self.written))))
+
+    def test_a_report_seen_at_the_wait_start_and_deleted_during_a_capped_wait_is_not_vanished(self):
+        self.write_report(self.START + 5)
+        early = self.written[0]
+        self.assertEqual([crash["report"] for crash in bql.run_crashes({}, self.START)], [str(early)])
+        def delete_early_and_write(now):
+            early.unlink(missing_ok=True)
+            self.write_report(now)
+        _, capped, _, vanished = self.wait(delete_early_and_write, before={})
+        self.assertEqual((capped, vanished), (True, set()))
+
+
+class CrashVerdictTest(unittest.TestCase):
+    def test_a_capped_wait_adds_one_failure_that_names_vanished_reports_only_when_there_are_any(self):
+        crash = {"report": "BrushesThumbnail-1.ips", "process": "BrushesThumbnail", "time": 2e9}
+        [crash_failure] = bql.crash_verdict([crash], False, set())[0]
+
+        def capped(crashes, vanished):
+            return bql.crash_verdict(crashes, True, vanished)[0]
+        [kept], [gone] = capped([], set()), capped([], {"BrushesPreview-1.ips"})
+        self.assertIn("kept arriving", kept[0])
+        self.assertIn("restarted the crash wait", gone[0])
+        self.assertEqual(capped([crash], set()), [crash_failure, kept])
+        self.assertEqual(capped([crash], {"BrushesPreview-1.ips"}), [crash_failure, gone])
 
 
 def run_bql(*argv, **stubs):
