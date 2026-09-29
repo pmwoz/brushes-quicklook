@@ -45,9 +45,11 @@ Preconditions:
   and `retried` at most `retry_limit` across all 23 corpus files. With `BQL_REAL_FILES` set, the sweep includes those files too.
 - **Proof.** The PNGs and the `result.json` of the `hostile` run. The run is
   proven to fail: a `SIGSEGV` sent to its own extension process gave exit 1
-  and one report with `likely_file`. A new `Brushes*` report with a
-  `captureTime` inside the run, written every 10 s during the wait, gave exit 1
-  with `crash_wait_capped: true`.
+  and one report with `likely_file`. The cap alone is proven to fail a run.
+  During the crash wait of a `bql thumb` run, a new `Brushes*` report with a
+  `captureTime` inside the run, written every 10 s for 100 s and deleted 5 s
+  after each write, gave exit 1 with `crash_wait_capped: true` and an empty
+  `new_crash_reports`.
 
 ## Gotchas
 
@@ -64,5 +66,7 @@ Preconditions:
   `likely_file` is the last file that started before the `captureTime` in the
   report, so confirm it by rerunning `bql hostile <that file>`.
 - A crash from before the run does not count, even when its report arrives
-  during the run. Its report and a deleted report do not restart the 30 s
-  wait. Only new `Brushes*` reports from the run fail it.
+  during the run. Only a new `Brushes*` report from the run, or one that
+  cannot be parsed yet, restarts the 30 s wait. A deletion does not. The cap
+  still fails a run whose restarting reports were later deleted or turned out
+  to predate the run.

@@ -196,7 +196,7 @@ def wait_for_new_crashes(before, since):
         if arrived:
             seen |= arrived
             quiet_since = time.time()
-    return crashes, capped
+    return crashes, capped, seen - {crash["report"] for crash in crashes}
 
 
 def readable(crashes):
@@ -204,17 +204,22 @@ def readable(crashes):
             for crash in crashes]
 
 
-def crash_verdict(crashes, capped):
+def crash_verdict(crashes, capped, vanished):
     failures = []
     if crashes:
         failures.append((f"Brushes crash reports from this run: {len(crashes)}",
                          "Open each report in `new_crash_reports`, find the crashing frame and fix it. "
                          "The extensions must never crash on a hostile file."))
-    if capped:
-        failures.append((f"Brushes crash reports kept arriving until the {CRASH_WAIT_CAP} s wait ended, "
+    if capped and vanished:
+        failures.append((f"{len(vanished)} Brushes crash reports restarted the crash wait until its {CRASH_WAIT_CAP} s cap, "
+                         "then were deleted or finished writing with a captureTime before the run, "
                          "so a crash from this run may be missing",
-                         "Find what keeps writing Brushes* reports to ~/Library/Logs/DiagnosticReports, "
-                         "wait until they stop, and rerun."))
+                         "Stop whatever deletes Brushes* reports in ~/Library/Logs/DiagnosticReports during a run, "
+                         "or wait until ReportCrash stops writing reports of earlier crashes, and rerun."))
+    elif capped:
+        failures.append((f"Reports kept arriving until the {CRASH_WAIT_CAP} s wait ended, so a later crash may be missing",
+                         f"Rerun after the fix, because a report that arrived after the {CRASH_WAIT_CAP} s wait "
+                         "is not in `new_crash_reports`."))
     return failures, {"new_crash_reports": readable(crashes), "crash_wait_capped": capped}
 
 
@@ -573,11 +578,11 @@ def cmd_hostile(args):
                      "extension": preview["extension"], "attempts": preview["attempts"],
                      "problems": [p for p in [None if thumbnail["png"] else "no thumbnail: " + thumbnail["qlmanage"],
                                               preview["problem"]] if p]})
-    crashes, capped = wait_for_new_crashes(before, started[0])
+    crashes, capped, vanished = wait_for_new_crashes(before, started[0])
     for crash in crashes:
         i = bisect_right(started, crash["time"]) if crash["time"] is not None else 0
         crash["likely_file"] = rows[i - 1]["file"] if i else None
-    failures, crash_fields = crash_verdict(crashes, capped)
+    failures, crash_fields = crash_verdict(crashes, capped, vanished)
     unexercised = [row["file"] for row in rows if row["problems"]]
     if unexercised:
         failures.append((f"{len(unexercised)} of {len(rows)} files were not exercised",

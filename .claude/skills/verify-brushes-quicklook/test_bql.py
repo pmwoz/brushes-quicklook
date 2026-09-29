@@ -50,27 +50,36 @@ class WaitForNewCrashesTest(unittest.TestCase):
         clock = FakeClock(self.START, on_tick)
         with mock.patch.object(bql, "time", clock):
             before = bql.crash_reports()
-            crashes, capped = bql.wait_for_new_crashes(before, clock.now)
-        return clock.now - self.START, capped, crashes
+            crashes, capped, vanished = bql.wait_for_new_crashes(before, clock.now)
+        return clock.now - self.START, capped, crashes, vanished
 
     def test_reports_from_before_the_run_do_not_restart_the_quiet_window(self):
-        self.assertEqual(self.wait(lambda now: self.write_report(self.START - 3600)), (30, False, []))
+        self.assertEqual(self.wait(lambda now: self.write_report(self.START - 3600)), (30, False, [], set()))
 
     def test_deleted_reports_do_not_restart_the_quiet_window(self):
         for _ in range(20):
             self.write_report(self.START - 3600)
-        self.assertEqual(self.wait(lambda now: self.written.pop().unlink()), (30, False, []))
+        self.assertEqual(self.wait(lambda now: self.written.pop().unlink()), (30, False, [], set()))
 
     def test_one_report_from_the_run_restarts_the_quiet_window_once(self):
-        elapsed, capped, crashes = self.wait(lambda now: self.written or self.write_report(now))
+        elapsed, capped, crashes, _ = self.wait(lambda now: self.written or self.write_report(now))
         self.assertEqual((elapsed, capped), (40, False))
         self.assertEqual([crash["report"] for crash in crashes], [str(self.written[0])])
 
     def test_reports_from_the_run_that_keep_arriving_hit_the_cap(self):
-        elapsed, capped, crashes = self.wait(self.write_report)
+        elapsed, capped, crashes, _ = self.wait(self.write_report)
         self.assertTrue(capped)
         self.assertLessEqual(bql.CRASH_WAIT_CAP, elapsed)
         self.assertEqual({crash["report"] for crash in crashes}, set(map(str, self.written)))
+
+    def test_reports_from_the_run_deleted_during_the_wait_hit_the_cap_with_no_crash(self):
+        def write_or_delete(now):
+            if self.written and self.written[-1].exists():
+                self.written[-1].unlink()
+            elif now - self.START < bql.CRASH_WAIT_CAP - 5:
+                self.write_report(now)
+        _, capped, crashes, vanished = self.wait(write_or_delete)
+        self.assertEqual((capped, crashes, vanished), (True, [], set(map(str, self.written))))
 
 
 if __name__ == "__main__":
