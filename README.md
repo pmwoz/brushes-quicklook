@@ -44,11 +44,12 @@ Not in scope: converting, editing or simulating strokes. This is a viewer.
   from an app bundle, so the app carries them. Its setup window explains the
   one step, turning the extensions on, with a button that opens the Quick Look
   extensions in System Settings. The app also opens brush files through File >
-  Open or a drop on that window and shows the same grid as the preview, loaded
-  by the same code in `Preview/PreviewContent.swift`. It does not become the
-  default app for these files.
+  Open or a drop on that window and shows the same grid as the preview. It
+  does not become the default app for these files.
 - `Preview/` is the `QLPreviewingController` extension for the space-bar
   preview.
+- `Viewer/` loads a brush file and draws the grid, the single-brush layout and
+  the error view. The preview extension and the app both compile it.
 - `Thumbnail/` is the `QLThumbnailProvider` extension for Finder icons.
 - `ffi/` is a thin Rust crate with an `extern "C"` surface that exposes the
   parsing and tip rendering from the [`brushkit`](https://github.com/pmwoz/brushkit)
