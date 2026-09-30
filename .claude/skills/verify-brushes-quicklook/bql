@@ -598,7 +598,7 @@ def cmd_hostile(args):
                          "Run `bql doctor` to check that both extensions are installed and registered."))
     retried = sum(row["attempts"] > 1 for row in rows)
     # Drills measured 6 retries in 3381 previews. More than this limit points at a new hang before preparePreviewOfFile.
-    # It is tuned for the 23-file corpus in CI and lenient on large sweeps.
+    # It is tuned for the small corpus in CI and lenient on large sweeps.
     retry_limit = 1 + len(rows) // 100
     if retried > retry_limit:
         failures.append((f"{retried} files needed a second qlmanage attempt, above the limit of {retry_limit}",

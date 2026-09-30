@@ -42,7 +42,7 @@ Preconditions:
   shows the brush glyph and the preview shows the 600 MB message. `bql cleanup`
   deletes the file.
 - **No crash.** Run `bql hostile`. Exit 0 with `crashed: 0`, `unexercised: []`
-  and `retried` at most `retry_limit` across all 23 corpus files. With `BQL_REAL_FILES` set, the sweep includes those files too.
+  and `retried` at most `retry_limit` across the whole corpus. With `BQL_REAL_FILES` set, the sweep includes those files too.
 - **Proof.** The PNGs and the `result.json` of the `hostile` run. The run is
   proven to fail: a `SIGSEGV` sent to its own extension process gave exit 1
   and one report with `likely_file`. The cap alone is proven to fail a run.
