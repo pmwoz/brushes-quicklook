@@ -13,17 +13,7 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
     func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping (Error?) -> Void) {
         let id = beginPreview(completionHandler: handler)
         Task {
-            let result: Result<(BrushFormat, BrushPreviewSet), any Error> = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(returning: Result {
-                        let format = try BrushFormat(url: url)
-                        return (format, try BrushPreviewSet.load(url, budget: .preview(format)))
-                    })
-                }
-            }
-            finishPreview(id, result: result.map { format, set in
-                PreviewGrid(fileName: url.lastPathComponent, format: format, set: set)
-            })
+            finishPreview(id, result: await PreviewContent.loadGrid(url))
         }
     }
 
@@ -44,11 +34,7 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
         guard let active = request, active.id == id else { return }
         request = nil
         view.subviews.forEach { $0.removeFromSuperview() }
-        let content: PreviewContent = switch result {
-        case .success(let grid): .grid(grid)
-        case .failure(let error): .failure(PreviewFailure(error: error))
-        }
-        let hosted = NSHostingView(rootView: content)
+        let hosted = NSHostingView(rootView: PreviewContent(result))
         preview = hosted
         install(hosted)
         active.completion(nil)
@@ -63,17 +49,5 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
             content.topAnchor.constraint(equalTo: view.topAnchor),
             content.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-    }
-}
-
-enum PreviewContent: View {
-    case grid(PreviewGrid)
-    case failure(PreviewFailure)
-
-    var body: some View {
-        switch self {
-        case .grid(let grid): grid
-        case .failure(let failure): failure
-        }
     }
 }

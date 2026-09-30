@@ -46,4 +46,4 @@ behavior a user sees. It then has these four H2 sections, in order.
 - [Finder thumbnail](./thumbnail.md): the tip grid, the single tip, the badge and the strip, and the glyph states.
 - [Space-bar preview](./preview.md): the grid, the single-brush layout, counts, names and sizes.
 - [Error states](./error-states.md): the "No preview" cells, the damaged-file view, the size limit and crash safety.
-- [Host app](./host-app.md): the install window and extension registration.
+- [Host app](./host-app.md): the setup window, the System Settings button, opening brush files in the app and extension registration.

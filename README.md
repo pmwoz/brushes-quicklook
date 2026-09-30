@@ -41,15 +41,21 @@ Not in scope: converting, editing or simulating strokes. This is a viewer.
 ## How it is built
 
 - `App/` is the host application. macOS registers Quick Look extensions only
-  from an app bundle, so the app exists mainly to carry them and to show
-  install instructions.
+  from an app bundle, so the app carries them. Its setup window explains the
+  one step, turning the extensions on, with a button that opens the Quick Look
+  extensions in System Settings. The app also opens brush files through File >
+  Open or a drop on that window and shows the same grid as the preview. It
+  ranks below any app that claims these types and opens them on double-click
+  only when no other app does.
 - `Preview/` is the `QLPreviewingController` extension for the space-bar
   preview.
+- `Viewer/` loads a brush file and draws the grid, the single-brush layout and
+  the error view. The preview extension and the app both compile it.
 - `Thumbnail/` is the `QLThumbnailProvider` extension for Finder icons.
 - `ffi/` is a thin Rust crate with an `extern "C"` surface that exposes the
   parsing and tip rendering from the [`brushkit`](https://github.com/pmwoz/brushkit)
-  crates to Swift. It builds as a universal static library that the two
-  extensions link.
+  crates to Swift. It builds as a universal static library that the app and
+  the two extensions link.
 
 Format parsing lives in `brushkit`. Parsing bugs go there.
 

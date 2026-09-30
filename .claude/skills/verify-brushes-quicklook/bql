@@ -35,7 +35,7 @@ CRASH_DIR = Path.home() / "Library/Logs/DiagnosticReports"
 CRASH_WAIT_CAP = 120
 LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
               "LaunchServices.framework/Support/lsregister")
-SOURCES = ["App", "Preview", "Thumbnail", "Shared", "ffi/src", "ffi/Cargo.toml", "ffi/Cargo.lock", "project.yml"]
+SOURCES = ["App", "Preview", "Viewer", "Thumbnail", "Shared", "ffi/src", "ffi/Cargo.toml", "ffi/Cargo.lock", "project.yml"]
 
 WINDOWS_JS = """
 ObjC.import("CoreGraphics");
