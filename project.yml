@@ -32,10 +32,17 @@ targets:
   BrushesQuickLook:
     type: application
     platform: macOS
-    sources: [App]
+    sources:
+      - path: App
+      - path: Shared
+      - path: Preview
+        excludes: ["PreviewViewController.swift", "*.plist", "*.entitlements"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: pl.esdesign.brushesquicklook
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/ffi/include
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/ffi/target/universal
+        OTHER_LDFLAGS: -lbrushkit_ffi
     info:
       path: App/Info.plist
       properties:
@@ -43,6 +50,20 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSPrincipalClass: NSApplication
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        # Alternate keeps Photoshop and Procreate as the default apps for these files.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Photoshop Brush Pack
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [pl.esdesign.brushesquicklook.abr]
+          - CFBundleTypeName: Procreate Brush Set
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [pl.esdesign.brushesquicklook.brushset]
+          - CFBundleTypeName: Procreate Brush
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [pl.esdesign.brushesquicklook.brush]
         UTImportedTypeDeclarations:
           - UTTypeIdentifier: pl.esdesign.brushesquicklook.abr
             UTTypeDescription: Photoshop Brush Pack
@@ -65,6 +86,7 @@ targets:
         com.apple.security.app-sandbox: true
         com.apple.security.files.user-selected.read-only: true
     dependencies:
+      - target: BrushkitFFI
       - target: BrushesPreview
         embed: true
       - target: BrushesThumbnail
