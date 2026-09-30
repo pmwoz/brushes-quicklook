@@ -52,3 +52,9 @@ for bundle in "$app" \
     done
     printf 'ok %s %s\n' "$name" "${key##*.}"
 done
+
+bundle=$app
+observed=$(plutil -extract CFBundleIconName raw -o - "$app/Contents/Info.plist" 2>&1) || fail icon "$observed"
+[ "$observed" = AppIcon ] || fail icon "$observed"
+[ -f "$app/Contents/Resources/AppIcon.icns" ] || fail icon "no Contents/Resources/AppIcon.icns"
+printf 'ok %s icon\n' "${app##*/}"
