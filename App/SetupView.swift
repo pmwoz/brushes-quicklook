@@ -24,7 +24,7 @@ struct SetupView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .lineSpacing(2)
-            Text("To finish setup, turn on BrushesPreview and BrushesThumbnail in the Quick Look extensions of System Settings.")
+            Text("To finish setup, turn on BrushesPreview and BrushesThumbnail in System Settings > General > Login Items & Extensions > Quick Look.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .lineSpacing(2)
