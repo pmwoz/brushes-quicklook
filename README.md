@@ -45,7 +45,8 @@ Not in scope: converting, editing or simulating strokes. This is a viewer.
   one step, turning the extensions on, with a button that opens the Quick Look
   extensions in System Settings. The app also opens brush files through File >
   Open or a drop on that window and shows the same grid as the preview. It
-  does not become the default app for these files.
+  ranks below any app that claims these types and opens them on double-click
+  only when no other app does.
 - `Preview/` is the `QLPreviewingController` extension for the space-bar
   preview.
 - `Viewer/` loads a brush file and draws the grid, the single-brush layout and

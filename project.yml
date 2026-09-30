@@ -49,7 +49,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSPrincipalClass: NSApplication
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
-        # Alternate keeps Photoshop and Procreate as the default apps for these files.
+        # Alternate ranks the app below any app that claims these types, so it opens them on
+        # double-click only when no other app does.
         CFBundleDocumentTypes:
           - CFBundleTypeName: Photoshop Brush Pack
             CFBundleTypeRole: Viewer
