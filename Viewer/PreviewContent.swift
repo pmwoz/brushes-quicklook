@@ -12,9 +12,12 @@ enum PreviewContent: View {
     }
 
     /// The space-bar preview and the app's document window both load through here, so they show the same thing.
-    static func loadGrid(_ url: URL) async -> Result<PreviewGrid, any Error> {
+    /// The time limit starts when `queue` runs the load, not when it is queued.
+    static func loadGrid(
+        _ url: URL, on queue: DispatchQueue = .global(qos: .userInitiated)
+    ) async -> Result<PreviewGrid, any Error> {
         let result: Result<(BrushFormat, BrushPreviewSet), any Error> = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
+            queue.async {
                 continuation.resume(returning: Result {
                     let format = try BrushFormat(url: url)
                     return (format, try BrushPreviewSet.load(url, budget: .preview(format)))
