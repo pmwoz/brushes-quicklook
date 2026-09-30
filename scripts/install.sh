@@ -70,5 +70,15 @@ for name in $extensions; do
         *) fail verify "$id: $observed" ;;
     esac
     printf '%s\n' "$observed"
+    executable=Contents/PlugIns/Brushes$name.appex/Contents/MacOS/Brushes$name
+    for pid in $(pgrep -U "$(id -u)" -x "Brushes$name" || :); do
+        path=$(ps -o comm= -p "$pid" || :)
+        case "$path" in
+            *"BrushesQuickLook.app/$executable") ;;
+            *) continue ;;
+        esac
+        [ "$path" = "$destination/$executable" ] || fail verify "$id: pid $pid runs $path"
+        observed=$(codesign -v "$pid" 2>&1) || { kill -0 "$pid" 2>/dev/null && fail verify "$id: pid $observed"; }
+    done
 done
 printf 'ok verify\n'
