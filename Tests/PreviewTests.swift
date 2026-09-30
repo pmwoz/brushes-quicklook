@@ -53,6 +53,17 @@ final class PreviewTests: XCTestCase {
         }
     }
 
+    func testABrushIsDecodedOnceAtTheSizeASetDecodesItsSingleBrushAgainAt() {
+        let brush = LoadBudget.preview(.brush)
+        guard case .all(nil) = brush.entries else { return XCTFail("Expected one decode for a .brush") }
+        for format in [BrushFormat.abr, .brushset] {
+            guard case .all(let singleBrushCell?) = LoadBudget.preview(format).entries else {
+                return XCTFail("Expected a second decode for a one-brush \(format)")
+            }
+            XCTAssertEqual(brush.cell, singleBrushCell, "\(format)")
+        }
+    }
+
     func testLoadWithNoBrushBuiltByTheTimeLimitThrowsTimedOut() throws {
         let file = try copyFixture("ordered_set", extension: "brushset")
         defer { try? FileManager.default.removeItem(at: file) }

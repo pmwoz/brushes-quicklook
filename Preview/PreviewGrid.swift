@@ -24,7 +24,7 @@ struct PreviewGrid: View {
     }
 
     nonisolated static func notReachedText(_ count: Int) -> String {
-        let seconds = (LoadBudget.preview.timeLimit / .seconds(1)).formatted()
+        let seconds = (LoadBudget.previewTimeLimit / .seconds(1)).formatted()
         let brushes = count == 1 ? "brush was" : "brushes were"
         return "\(count) more \(brushes) not loaded. Previews stop loading after \(seconds) seconds."
     }
