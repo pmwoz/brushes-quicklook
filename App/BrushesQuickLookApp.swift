@@ -9,7 +9,11 @@ struct BrushesQuickLookApp: App {
         .windowResizability(.contentSize)
 
         DocumentGroup(viewing: BrushDocument.self) { file in
-            BrushDocumentView(url: file.fileURL)
+            if let url = file.fileURL {
+                BrushDocumentView(url: url)
+            } else {
+                PreviewFailure(error: CocoaError(.fileReadUnknown))
+            }
         }
         .defaultSize(width: 760, height: 600)
     }

@@ -24,7 +24,7 @@ struct BrushDocumentView: View {
     /// One load at a time, so opening many files at once does not hold many of them in memory together.
     private static let loads = DispatchQueue(label: "pl.esdesign.brushesquicklook.document-load", qos: .userInitiated)
 
-    let url: URL?
+    let url: URL
     @State private var phase = Phase.loading
 
     var body: some View {
@@ -40,7 +40,6 @@ struct BrushDocumentView: View {
         }
         .frame(minWidth: 480, minHeight: 360)
         .task(id: url) {
-            guard let url else { return }
             phase = .loading
             phase = .loaded(PreviewContent(await PreviewContent.loadGrid(url, on: Self.loads)))
         }
