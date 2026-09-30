@@ -86,6 +86,8 @@ It first unregisters every other copy of the app that LaunchServices knows,
 including the one `xcodebuild` registers for its own build product, so System
 Settings lists the app once. Build products live in `build.noindex`, which
 Spotlight skips, so an unregistered build is not registered again by indexing.
+Registering the app ends its running extension processes, and the script fails
+if a live extension process still runs a binary other than the installed one.
 
 Tests:
 

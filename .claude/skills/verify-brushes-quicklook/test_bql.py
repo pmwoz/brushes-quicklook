@@ -191,7 +191,10 @@ class ExitContractTest(unittest.TestCase):
         self.addCleanup(env.stop)
         os.environ.pop("GITHUB_STEP_SUMMARY", None)
 
-    def doctor(self, installed=True, built=True, mismatched=None, unregistered=None, other_copy=False):
+    def doctor(self, installed=True, built=True, mismatched=None, unregistered=None, other_copy=False, previews=None):
+        """previews maps a BrushesPreview pid to (root, codesign -v error or None, alive).
+        root is "app", "build", "other" or None for a process that exited."""
+        previews = previews or {}
         base = Path(tempfile.mkdtemp(dir=self.dir))
         app, build = base / "installed/BrushesQuickLook.app", base / "build/BrushesQuickLook.app"
         for bundle, exists in ((app, installed), (build, built)):
@@ -211,6 +214,17 @@ class ExitContractTest(unittest.TestCase):
                 return SimpleNamespace(stdout="" if kind == unregistered else line)
             if args[0] == "git":
                 return SimpleNamespace(stdout="project.yml\n")
+            if args[0] == "pgrep":
+                return SimpleNamespace(stdout="\n".join(previews) if args[-1] == bql.PLUGINS["preview"] else "")
+            if args[0] == "ps":
+                root = {"app": app, "build": build, "other": base / "Other.app"}.get(previews[args[-1]][0])
+                executable = "Contents/PlugIns/BrushesPreview.appex/Contents/MacOS/BrushesPreview"
+                return SimpleNamespace(stdout=f"{root}/{executable}\n" if root else "")
+            if args[0] == "codesign":
+                error = previews[args[-1]][1]
+                return SimpleNamespace(returncode=1 if error else 0, stderr=f"{error}\n" if error else "")
+            if args[0] == "kill":
+                return SimpleNamespace(returncode=0 if previews[args[-1]][2] else 1)
             if args[0] == bql.LSREGISTER:
                 copies = [app, base / "Other/BrushesQuickLook.app"] if other_copy else [app]
                 return SimpleNamespace(stdout="".join(f"    path:    {copy} (0x1)\n" for copy in copies))
@@ -294,6 +308,17 @@ class ExitContractTest(unittest.TestCase):
                 code, result = run_bql("doctor", **self.doctor(other_copy=other_copy))
                 self.assertEqual((code, result["ok"], "error" in result, "fix" in result), (0, True, False, False))
                 self.assertEqual({c["check"]: c["status"] for c in result["checks"] if c["status"] != "ok"}, not_ok)
+
+    def test_doctor_warns_on_a_live_extension_process_not_running_the_installed_code(self):
+        replaced = "102: the code on disk does not match what is running"
+        previews = {"101": ("app", None, True), "102": ("app", replaced, True), "103": ("build", None, True),
+                    "104": ("other", None, True), "105": (None, None, False),
+                    "106": ("app", "106: No such process", False)}
+        code, result = run_bql("doctor", **self.doctor(previews=previews))
+        running = {c["detail"]["pid"]: (c["status"], c["detail"]["verify"])
+                   for c in result["checks"] if c["check"] == "running-preview"}
+        self.assertEqual((code, running), (0, {101: ("ok", None), 102: ("warn", replaced), 103: ("warn", None),
+                                               106: ("ok", None)}))
 
     def test_a_missing_file_exits_2_with_error_and_fix(self):
         code, result = run_bql("thumb", self.dir / "missing.abr")

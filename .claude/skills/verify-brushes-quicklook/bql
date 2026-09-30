@@ -465,10 +465,17 @@ def cmd_doctor(args):
           f"Other copies are registered; Quick Look may route to them. {install_fix} unregisters them." if extra else None)
 
     for kind, name in PLUGINS.items():
-        for pid in run(["pgrep", "-x", name]).stdout.split():
-            running = cdhash(pid)
-            stale = running != installed.get(kind)
-            check(f"running-{kind}", "warn" if stale else "ok", {"pid": int(pid), "cdhash": running},
+        executable = f"Contents/PlugIns/{name}.appex/Contents/MacOS/{name}"
+        for pid in run(["pgrep", "-U", str(os.getuid()), "-x", name]).stdout.split():
+            path = run(["ps", "-o", "comm=", "-p", pid]).stdout.strip()
+            if not path.endswith(f"BrushesQuickLook.app/{executable}"):
+                continue
+            # A pid's CDHash is read from disk, so only `codesign -v` sees a file replaced or deleted under it.
+            verify = run(["codesign", "-v", pid])
+            invalid = verify.returncode != 0 and run(["kill", "-0", pid]).returncode == 0
+            stale = path != str(APP / executable) or invalid
+            check(f"running-{kind}", "warn" if stale else "ok",
+                  {"pid": int(pid), "path": path, "verify": verify.stderr.strip() if invalid else None},
                   f"This {name} process runs an older binary and keeps serving requests. Run `kill {pid}`; "
                   "Quick Look starts a fresh one on the next request." if stale else None)
 
@@ -501,7 +508,8 @@ def cmd_install(args):
             "check-build": "The Release product failed a lipo, hardened runtime, sandbox or UTType check. "
                            "Run scripts/check-build.sh on it.",
             "replace": "Check that /Applications is writable and the app is not open from a mounted image.",
-            "verify": "Another copy is still registered. Run `bql doctor` and unregister it with lsregister -u.",
+            "verify": "Another copy is still registered or a live extension process runs an older binary. "
+                      "Run `bql doctor`, then unregister the copy with lsregister -u or kill the PID it names.",
         }
         step = failed.group(1) if failed else "unknown"
         emit({"ok": False, "steps": steps, "failed_step": step,

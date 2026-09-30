@@ -34,7 +34,9 @@ bql install             # wraps scripts/install.sh: build, check, replace, regis
 
 `install` quits the running app, replaces `/Applications/BrushesQuickLook.app`,
 unregisters every other registered copy, registers the app and both
-extensions, and opens the host app window. The dry run only reads
+extensions, and opens the host app window. Registering ends the app's running
+extension processes. `install` fails when a live extension process still runs
+another binary. The dry run only reads
 `lsregister -dump`. It was checked to leave the app's mtime, the pluginkit
 registration and the running processes unchanged.
 
@@ -56,8 +58,11 @@ Run `bql doctor` first and whenever a result looks wrong. It changes nothing and
   at the `/Applications` path.
 - `launchservices` (warn): no other copy of the app is registered.
 - `running-preview`, `running-thumbnail` (warn): a live extension process runs
-  an older binary. Finder keeps its extension processes after an install and
-  they keep serving old code. The check gives the exact `kill <pid>`.
+  an older binary. `bql install` ends these processes, so the warning means the
+  app was replaced without registering it again, for example by another
+  checkout or a manual copy. The check reads each process's executable path and
+  uses `codesign -v`, because the CDHash of a pid is read from disk. The check
+  gives the exact `kill <pid>`.
 
 ## Drive
 
