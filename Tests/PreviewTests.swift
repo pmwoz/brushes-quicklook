@@ -57,9 +57,11 @@ final class PreviewTests: XCTestCase {
         let brush = LoadBudget.preview(.brush)
         guard case .all(nil) = brush.entries else { return XCTFail("Expected one decode for a .brush") }
         for format in [BrushFormat.abr, .brushset] {
-            guard case .all(let singleBrushCell?) = LoadBudget.preview(format).entries else {
+            let set = LoadBudget.preview(format)
+            guard case .all(let singleBrushCell?) = set.entries else {
                 return XCTFail("Expected a second decode for a one-brush \(format)")
             }
+            XCTAssertLessThan(set.cell, singleBrushCell, "\(format)")
             XCTAssertEqual(brush.cell, singleBrushCell, "\(format)")
         }
     }
