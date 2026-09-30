@@ -16,7 +16,8 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
             let result: Result<(BrushFormat, BrushPreviewSet), any Error> = await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     continuation.resume(returning: Result {
-                        (try BrushFormat(url: url), try BrushPreviewSet.load(url, budget: .preview))
+                        let format = try BrushFormat(url: url)
+                        return (format, try BrushPreviewSet.load(url, budget: .preview(format)))
                     })
                 }
             }

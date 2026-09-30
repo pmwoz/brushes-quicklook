@@ -30,8 +30,18 @@ struct LoadBudget: Sendable {
         self.timeLimit = timeLimit
     }
 
-    /// A single brush fills a 380 pt well, so it is decoded again at a size that stays sharp there.
-    static let preview = LoadBudget(cell: 256, entries: .all(singleBrushCell: 768), timeLimit: .seconds(10))
+    static let previewTimeLimit: Duration = .seconds(10)
+
+    /// A single brush fills a 380 pt well, so it is decoded at a size that stays sharp there. A `.brush`
+    /// always holds one brush and is decoded at that size once. A set is decoded again only when it
+    /// turns out to hold one brush.
+    static func preview(_ format: BrushFormat) -> LoadBudget {
+        let singleBrushCell = 768
+        return switch format {
+        case .brush: LoadBudget(cell: singleBrushCell, entries: .all(singleBrushCell: nil), timeLimit: previewTimeLimit)
+        case .abr, .brushset: LoadBudget(cell: 256, entries: .all(singleBrushCell: singleBrushCell), timeLimit: previewTimeLimit)
+        }
+    }
 
     static func thumbnail(maximumSize: CGSize, scale: CGFloat, tips: Int) -> LoadBudget {
         let pixels = (max(maximumSize.width, maximumSize.height) * scale).rounded(.up)
