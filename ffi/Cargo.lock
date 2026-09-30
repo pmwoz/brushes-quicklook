@@ -37,8 +37,8 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "brushkit-abr"
-version = "0.5.0"
-source = "git+https://github.com/pmwoz/brushkit?tag=v0.5.0#6f106b8399ae01709ef46c9606d574291a59eb58"
+version = "0.6.0"
+source = "git+https://github.com/pmwoz/brushkit?tag=v0.6.0#4814e440c1ed5cc484afb95aef724a6c4878b582"
 dependencies = [
  "byteorder",
  "flate2",
@@ -54,8 +54,8 @@ dependencies = [
 
 [[package]]
 name = "brushkit-preview"
-version = "0.5.0"
-source = "git+https://github.com/pmwoz/brushkit?tag=v0.5.0#6f106b8399ae01709ef46c9606d574291a59eb58"
+version = "0.6.0"
+source = "git+https://github.com/pmwoz/brushkit?tag=v0.6.0#4814e440c1ed5cc484afb95aef724a6c4878b582"
 dependencies = [
  "brushkit-abr",
  "image",
