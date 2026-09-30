@@ -21,7 +21,7 @@ func color(_ base: CGColor, alpha: CGFloat) -> CGColor { base.copy(alpha: alpha)
 
 func mix(_ from: CGFloat, _ to: CGFloat, _ t: CGFloat) -> CGFloat { from + (to - from) * t }
 
-/// SplitMix64, so the splatter is identical on every run and every machine.
+/// SplitMix64, so the splatter is identical on every run.
 struct SeededGenerator: RandomNumberGenerator {
     var state: UInt64
     mutating func next() -> UInt64 {
@@ -72,13 +72,15 @@ func drawIcon(in context: CGContext, pixels: Int) {
     let side = CGFloat(pixels)
     // 0 at 16 px, 1 from 128 px up. Small sizes get bolder, simpler tips so the motif still reads.
     let detail = min(max((side - 16) / 112, 0), 1)
-    context.scaleBy(x: side / 1024, y: side / 1024)
+    let unit = side / 1024
+    context.scaleBy(x: unit, y: unit)
 
     let body = CGRect(x: 100, y: 100, width: 824, height: 824)
     let bodyShape = CGPath(roundedRect: body, cornerWidth: 185, cornerHeight: 185, transform: nil)
 
     context.saveGState()
-    context.setShadow(offset: CGSize(width: 0, height: -10), blur: 24, color: CGColor(gray: 0, alpha: 0.35))
+    // Shadows ignore the CTM, so they are scaled by hand.
+    context.setShadow(offset: CGSize(width: 0, height: -10 * unit), blur: 24 * unit, color: CGColor(gray: 0, alpha: 0.35))
     context.addPath(bodyShape)
     context.setFillColor(CGColor(gray: 0, alpha: 1))
     context.fillPath()
@@ -98,7 +100,7 @@ func drawIcon(in context: CGContext, pixels: Int) {
     let card = CGRect(x: 192, y: 192, width: 640, height: 640)
     let cardRadius = mix(96, 60, detail)
     context.saveGState()
-    context.setShadow(offset: CGSize(width: 0, height: -8), blur: 20, color: CGColor(gray: 0, alpha: 0.3))
+    context.setShadow(offset: CGSize(width: 0, height: -8 * unit), blur: 20 * unit, color: CGColor(gray: 0, alpha: 0.3))
     context.addPath(CGPath(roundedRect: card, cornerWidth: cardRadius, cornerHeight: cardRadius, transform: nil))
     context.setFillColor(CGColor(gray: 1, alpha: 1))
     context.fillPath()

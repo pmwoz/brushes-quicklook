@@ -51,11 +51,10 @@ for bundle in "$app" \
         printf '%s\n' "$observed" | grep -Fq "\"$identifier\"" || fail "${key##*.}" "$observed"
     done
     printf 'ok %s %s\n' "$name" "${key##*.}"
-
-    if [ "$bundle" = "$app" ]; then
-        observed=$(plutil -extract CFBundleIconName raw -o - "$bundle/Contents/Info.plist" 2>&1) || fail icon "$observed"
-        [ "$observed" = AppIcon ] || fail icon "$observed"
-        [ -f "$bundle/Contents/Resources/AppIcon.icns" ] || fail icon "no Contents/Resources/AppIcon.icns"
-        printf 'ok %s icon\n' "$name"
-    fi
 done
+
+bundle=$app
+observed=$(plutil -extract CFBundleIconName raw -o - "$app/Contents/Info.plist" 2>&1) || fail icon "$observed"
+[ "$observed" = AppIcon ] || fail icon "$observed"
+[ -f "$app/Contents/Resources/AppIcon.icns" ] || fail icon "no Contents/Resources/AppIcon.icns"
+printf 'ok %s icon\n' "${app##*/}"
