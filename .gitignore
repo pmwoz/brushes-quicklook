@@ -17,3 +17,16 @@ target/
 
 # Python
 __pycache__/
+
+# Credentials and local environment files
+.env
+.env.*
+*.p8
+*.p12
+*.pfx
+*.pem
+*.key
+*.keychain
+*.keychain-db
+*.mobileprovision
+*.provisionprofile
