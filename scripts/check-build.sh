@@ -51,6 +51,12 @@ for bundle in "$app" \
         printf '%s\n' "$observed" | grep -Fq "\"$identifier\"" || fail "${key##*.}" "$observed"
     done
     printf 'ok %s %s\n' "$name" "${key##*.}"
+
+    observed=$(plutil -extract NSPrivacyAccessedAPITypes json -o - \
+        "$bundle/Contents/Resources/PrivacyInfo.xcprivacy" 2>&1) || fail privacy "$observed"
+    printf '%s\n' "$observed" | grep -Fq '"NSPrivacyAccessedAPICategoryFileTimestamp"' || fail privacy "$observed"
+    printf '%s\n' "$observed" | grep -Fq '"3B52.1"' || fail privacy "$observed"
+    printf 'ok %s privacy\n' "$name"
 done
 
 bundle=$app

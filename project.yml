@@ -37,7 +37,12 @@ targets:
   BrushesQuickLook:
     type: application
     platform: macOS
-    sources: [App, Viewer, Shared]
+    sources:
+      - App
+      - Viewer
+      - Shared
+      - path: PrivacyInfo.xcprivacy
+        buildPhase: resources
     settings:
       groups: [brushkitFFI]
       base:
@@ -96,7 +101,12 @@ targets:
   BrushesPreview:
     type: app-extension
     platform: macOS
-    sources: [Preview, Viewer, Shared]
+    sources:
+      - Preview
+      - Viewer
+      - Shared
+      - path: PrivacyInfo.xcprivacy
+        buildPhase: resources
     settings:
       groups: [brushkitFFI]
       base:
@@ -121,7 +131,11 @@ targets:
   BrushesThumbnail:
     type: app-extension
     platform: macOS
-    sources: [Thumbnail, Shared]
+    sources:
+      - Thumbnail
+      - Shared
+      - path: PrivacyInfo.xcprivacy
+        buildPhase: resources
     settings:
       groups: [brushkitFFI]
       base:
