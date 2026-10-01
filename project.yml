@@ -49,6 +49,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSPrincipalClass: NSApplication
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSApplicationCategoryType: public.app-category.graphics-design
+        ITSAppUsesNonExemptEncryption: false
         # Alternate ranks the app below any app that claims these types, so it opens them on
         # double-click only when no other app does.
         CFBundleDocumentTypes:
