@@ -58,3 +58,11 @@ observed=$(plutil -extract CFBundleIconName raw -o - "$app/Contents/Info.plist" 
 [ "$observed" = AppIcon ] || fail icon "$observed"
 [ -f "$app/Contents/Resources/AppIcon.icns" ] || fail icon "no Contents/Resources/AppIcon.icns"
 printf 'ok %s icon\n' "${app##*/}"
+
+observed=$(plutil -extract LSApplicationCategoryType raw -o - "$app/Contents/Info.plist" 2>&1) || fail category "$observed"
+[ "$observed" = public.app-category.graphics-design ] || fail category "$observed"
+printf 'ok %s category\n' "${app##*/}"
+
+observed=$(plutil -extract ITSAppUsesNonExemptEncryption raw -o - "$app/Contents/Info.plist" 2>&1) || fail encryption "$observed"
+[ "$observed" = false ] || fail encryption "$observed"
+printf 'ok %s encryption\n' "${app##*/}"
