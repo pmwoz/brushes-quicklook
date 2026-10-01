@@ -52,10 +52,11 @@ for bundle in "$app" \
     done
     printf 'ok %s %s\n' "$name" "${key##*.}"
 
-    observed=$(plutil -extract NSPrivacyAccessedAPITypes json -o - \
-        "$bundle/Contents/Resources/PrivacyInfo.xcprivacy" 2>&1) || fail privacy "$observed"
-    printf '%s\n' "$observed" | grep -Fq '"NSPrivacyAccessedAPICategoryFileTimestamp"' || fail privacy "$observed"
-    printf '%s\n' "$observed" | grep -Fq '"3B52.1"' || fail privacy "$observed"
+    manifest="$bundle/Contents/Resources/PrivacyInfo.xcprivacy"
+    observed=$(plutil -extract NSPrivacyAccessedAPITypes.0.NSPrivacyAccessedAPIType raw -o - "$manifest" 2>&1) || fail privacy "$observed"
+    [ "$observed" = NSPrivacyAccessedAPICategoryFileTimestamp ] || fail privacy "$observed"
+    observed=$(plutil -extract NSPrivacyAccessedAPITypes.0.NSPrivacyAccessedAPITypeReasons.0 raw -o - "$manifest" 2>&1) || fail privacy "$observed"
+    [ "$observed" = C617.1 ] || fail privacy "$observed"
     printf 'ok %s privacy\n' "$name"
 done
 
