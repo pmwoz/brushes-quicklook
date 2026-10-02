@@ -65,10 +65,11 @@ Preconditions:
 - **File menu.** With `ordered_set.brushset` open, list the menu with
   `osascript -l JavaScript -e 'const p = Application("System Events").processes.byName("BrushesQuickLook"); p.frontmost = true; delay(0.5); JSON.stringify(p.menuBars[0].menuBarItems.byName("File").menus[0].menuItems().map(i => i.title()))'`.
   It reads `New, Open…, Open Recent, "", Close, Close All, "", Share`. Command-S
-  opens no sheet. Close the window with File > Close, open two more files and
-  list the menu again. It is unchanged, because SwiftUI rebuilds the menu when
-  a document window closes. File > Close All closes every window, and a file
-  under Open Recent opens again.
+  opens no sheet. Click the setup window and then the document window, close
+  the document with File > Close, open two more files, then use File > Close
+  All. List the menu after each step. It stays the same, because the app
+  removes the items again each time SwiftUI rebuilds the menu. A file under
+  Open Recent opens again.
 - **Too large.** Run `mkfile -n 600m build.noindex/verify/fixtures/too_large.abr`,
   note `ps -o rss= -p $(pgrep -x BrushesQuickLook)`, then run
   `open -a "$A" build.noindex/verify/fixtures/too_large.abr`. The window shows
