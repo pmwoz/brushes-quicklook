@@ -13,6 +13,7 @@ macOS registers the extensions when the app is opened for the first time.
 - `app-settings` means "Open System Settings" opens the Quick Look sheet of General > Login Items & Extensions, which lists BrushesPreview and BrushesThumbnail under BrushesQuickLook.
 - `app-open` means a brush file opened in the app shows a 760 × 600 window titled with the file name and the preview's content: the grid, the single-brush layout or "This file can’t be previewed".
 - `app-open-ways` covers the entry points: File > Open, "Open Brush File…", a drop on the setup window, and Open With in Finder, which `open -a` stands in for. The app is an Alternate handler: it ranks below any app that claims these types and opens them on double-click only when no other app does.
+- `app-file-menu` means the File menu has Open, Open Recent, Close and Close All and no Save, Save As, Duplicate, Rename, Move To or Revert To, with or without a brush file open.
 - `app-registration` means that after install, pluginkit lists exactly one enabled copy of each extension, inside `/Applications`.
 - `app-types` means the imported UTTypes route brush files to the extensions, which the thumbnail and preview features confirm.
 
@@ -61,6 +62,14 @@ Preconditions:
   then type the path in the panel with Command-Shift-G and press Return twice.
   A window named after the file opens. `click button 2 of group 1 of window "Brushes Quick Look"`
   ("Open Brush File…") opens the same panel.
+- **File menu.** With `ordered_set.brushset` open, list the menu with
+  `osascript -l JavaScript -e 'const p = Application("System Events").processes.byName("BrushesQuickLook"); p.frontmost = true; delay(0.5); JSON.stringify(p.menuBars[0].menuBarItems.byName("File").menus[0].menuItems().map(i => i.title()))'`.
+  It reads `New, Open…, Open Recent, "", Close, Close All, "", Share`. Command-S
+  opens no sheet. Click the setup window and then the document window, close
+  the document with File > Close, open two more files, then use File > Close
+  All. List the menu after each step. It stays the same, because the app
+  removes the items again each time SwiftUI rebuilds the menu. A file under
+  Open Recent opens again.
 - **Too large.** Run `mkfile -n 600m build.noindex/verify/fixtures/too_large.abr`,
   note `ps -o rss= -p $(pgrep -x BrushesQuickLook)`, then run
   `open -a "$A" build.noindex/verify/fixtures/too_large.abr`. The window shows
@@ -89,5 +98,5 @@ Preconditions:
   `button 1` is "Open System Settings", `button 2` is "Open Brush File…".
 - A drop on the setup window was driven with posted mouse events from a Finder
   icon. `bql` cannot drop, and a drop on the Dock icon was not proven.
-- File > Save, Duplicate, Rename and Move To stay in the File menu. Save shows
-  the system alert "You don’t own the file…" and changes nothing.
+- System Events also lists alternate items. "Close All" is the Option
+  alternate of "Close", so it shows in the list without the Option key.
