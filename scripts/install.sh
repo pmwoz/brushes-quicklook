@@ -22,6 +22,10 @@ case "$destination" in
     /*/BrushesQuickLook.app) ;;
     *) fail destination "$destination must be an absolute path ending in BrushesQuickLook.app" ;;
 esac
+# app_pids compares this path with the one ps reports, so resolve symlinks and dots.
+if [ -d "${destination%/*}" ]; then
+    destination=$(cd -- "${destination%/*}" && pwd -P)/BrushesQuickLook.app
+fi
 
 cd -- "$(dirname "$0")/.."
 app=$PWD/build.noindex/Build/Products/Release/BrushesQuickLook.app
@@ -51,7 +55,7 @@ done
 printf 'ok unregister %s stale paths\n' "$(printf '%s\n' "$stale" | grep -c .)"
 
 app_pids() {
-    for pid in $(pgrep -U "$(id -u)" -x BrushesQuickLook || :); do
+    for pid in $(pgrep -x BrushesQuickLook || :); do
         case $(ps -o comm= -p "$pid" || :) in
             "$destination/Contents/MacOS/BrushesQuickLook") printf '%s\n' "$pid" ;;
         esac
@@ -59,12 +63,13 @@ app_pids() {
 }
 
 # The quit reply arrives before the process exits. `open` during the exit goes to the dying process.
-quit=$(osascript -e 'tell application id "pl.esdesign.brushesquicklook" to quit' 2>&1) || :
 deadline=$(($(date +%s) + 10))
+quit=$(osascript -e 'with timeout of 10 seconds' -e 'tell application id "pl.esdesign.brushesquicklook" to quit' \
+    -e 'end timeout' 2>&1) || :
 running=$(app_pids)
 while [ -n "$running" ]; do
     [ "$(date +%s)" -lt "$deadline" ] \
-        || fail quit "pid $(printf '%s' "$running" | tr '\n' ' ') still runs $destination 10 s after the quit request. $quit"
+        || fail quit "pid $(printf '%s' "$running" | tr '\n' ' ') still runs $destination 10 s after the quit request.${quit:+ $quit}"
     sleep 0.2
     running=$(app_pids)
 done
@@ -78,7 +83,7 @@ printf 'ok replace\n'
 for name in $extensions; do
     pluginkit -a "$destination/Contents/PlugIns/Brushes$name.appex"
 done
-open "$destination"
+observed=$(open "$destination" 2>&1) || fail open "$observed"
 for name in $extensions; do
     pluginkit -e use -i "pl.esdesign.brushesquicklook.$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
 done
