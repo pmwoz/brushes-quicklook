@@ -5,7 +5,7 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import nullcontext, redirect_stderr, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -173,7 +173,7 @@ def previews(problem=None, attempts=1):
 
 
 def app_windows(problem=None):
-    return lambda file, png, settle: {"file": str(file), "png": None if problem else "x.png", "pid": 200,
+    return lambda file, run_dir, settle: {"file": str(file), "png": None if problem else "x.png", "pid": 200,
                                       "problem": problem}
 
 
@@ -338,22 +338,36 @@ class ExitContractTest(unittest.TestCase):
 
 
 class OpenInAppTest(unittest.TestCase):
-    def open(self, dies):
-        """Pid 100 is an instance that ran before. `open` starts 200, the new instance, and 300, another copy."""
+    START = 1_800_000_000
+
+    def open(self, dies=False, load=("begin", "end")):
+        """Pid 100 is an instance that ran before. `open` starts 200, the new instance, and 300, an instance of the
+        same app that someone else starts during the call. Only 200 has the token, and 300 starts a load too."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        app = str(bql.APP / "Contents/MacOS/BrushesQuickLook")
-        paths = {100: app, 200: app, 300: "/tmp/build/BrushesQuickLook.app/Contents/MacOS/BrushesQuickLook"}
-        running, signals = {100}, []
+        running, signals, launched, now = {100}, [], {}, [self.START]
+
+        @contextmanager
+        def log_stream(log, *args):
+            launched["log"] = log
+            yield lambda: None
 
         def run(args, timeout=120, check=False):
             if args[0] == "open":
+                launched["token"] = args[-1]
                 running.update({200, 300})
+                events = [(300, "begin"), *((200, kind) for kind in load)]
+                launched["log"].write_text("".join(
+                    json.dumps({"processID": pid, "signpostName": "load", "signpostType": kind}) + "\n"
+                    for pid, kind in events))
             if args[0] == "pgrep":
-                return SimpleNamespace(stdout="\n".join(map(str, sorted(running))))
-            if args[0] == "ps":
-                return SimpleNamespace(stdout=f"{paths[int(args[-1])]}\n")
+                return SimpleNamespace(stdout="200\n" if args[-1] == launched.get("token") and 200 in running else "")
             return SimpleNamespace(returncode=0, stderr="")
+
+        def sleep(seconds):
+            now[0] += seconds
+            if dies:
+                running.discard(200)
 
         def kill(pid, signal):
             if signal:
@@ -371,20 +385,44 @@ class OpenInAppTest(unittest.TestCase):
             raise bql.Fail("screencapture failed: could not create image from window", "")
 
         capture = mock.Mock(side_effect=lambda window_id, png: 200 in running or vanished(window_id, png))
-        with mock.patch.multiple(bql, run=run, windows=windows, capture=capture, WORK=Path(tmp.name),
-                                 STATE=Path(tmp.name) / "state.json"), \
-                mock.patch.object(bql.os, "kill", kill), \
-                mock.patch.object(bql.time, "sleep", lambda seconds: dies and running.discard(200)):
-            result = bql.open_in_app(Path(tmp.name) / "a.abr", Path(tmp.name) / "a.png", 2)
+        clock = SimpleNamespace(time=lambda: now[0], sleep=sleep)
+        with mock.patch.multiple(bql, run=run, windows=windows, capture=capture, log_stream=log_stream, time=clock,
+                                 WORK=Path(tmp.name), STATE=Path(tmp.name) / "state.json"), \
+                mock.patch.object(bql.os, "kill", kill):
+            result = bql.open_in_app(Path(tmp.name) / "a.abr", Path(tmp.name), 2)
             state = bql.load_state()
-        return result, signals, running, state["app"]
+        return result, signals, running, state["app"], now[0] - self.START
 
     def test_it_ends_only_the_instance_it_started_and_reports_one_that_died_while_showing_the_file(self):
         for dies, problem in ((False, None), (True, "the app exited while it showed the file")):
             with self.subTest(dies=dies):
-                result, signals, running, tracked = self.open(dies)
+                result, signals, running, tracked, _ = self.open(dies)
                 self.assertEqual((result["pid"], result["problem"], bool(result["png"])), (200, problem, not dies))
                 self.assertEqual((signals, running, tracked), ([(200, 15)], {100, 300}, []))
+
+    def test_a_load_that_never_ends_is_a_problem_after_15_s(self):
+        result, signals, _, _, elapsed = self.open(load=("begin", "begin", "end"))
+        self.assertEqual((result["problem"], result["png"], elapsed, signals),
+                         ("the app did not finish loading the file within 15 s", None, 15, [(200, 15)]))
+
+
+class CleanupTest(unittest.TestCase):
+    def test_it_ends_a_tracked_app_instance_only_while_its_pid_still_has_the_token(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        work = Path(tmp.name)
+        mine = {"pid": 200, "file": "a.abr", "token": "bql-a"}
+        reused = {"pid": 300, "file": "b.abr", "token": "bql-b"}
+        (work / "state.json").write_text(json.dumps({"app": [mine, reused]}))
+        executable = bql.APP / "Contents/MacOS/BrushesQuickLook"
+        commands = {"200": f"{executable} -ApplePersistenceIgnoreState YES -BQLLaunch bql-a\n",
+                    "300": f"{executable} -ApplePersistenceIgnoreState YES -BQLLaunch bql-c\n"}
+        signals = []
+        with mock.patch.object(bql.os, "kill", lambda pid, signal: signals.append((pid, signal))):
+            code, result = run_bql("cleanup", run=lambda args, **kwargs: SimpleNamespace(stdout=commands[args[-1]]),
+                                   WORK=work, STATE=work / "state.json", FIXTURES=work / "fixtures",
+                                   EVIDENCE=work / "evidence")
+        self.assertEqual((code, signals, result["ended_app_instances"]), (0, [(200, 15)], [mine]))
 
 
 if __name__ == "__main__":

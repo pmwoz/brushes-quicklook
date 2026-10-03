@@ -96,8 +96,10 @@ Preconditions:
 - `bql install` replaces the only registered copy on this Mac. Another
   session's verification is lost. Check `bql doctor` first.
 - `bql cleanup` quits the app only when `bql install` opened it.
-- `bql hostile` opens each file in its own new instance with `open -n` and
-  ends only that PID, so the setup window and other instances stay open.
+- `bql hostile` opens each file in its own new instance with `open -n` and a
+  `-BQLLaunch <token>` argument, and ends only the PID that `pgrep -f` finds
+  for that token, so the setup window and other instances stay open, including
+  one started during the run.
 - `open -a BrushesQuickLook` by name can pick a copy other than the one under
   test. Pass the full path.
 - The System Settings window owner name is localized, for example "Ustawienia

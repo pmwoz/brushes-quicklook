@@ -124,6 +124,14 @@ Proof standards:
   `retry_limit` needed a second attempt. The limit is 1 plus 1 per 100 files.
   Under GitHub Actions it appends the verdict and the counts to the job
   summary.
+- An app proof in `hostile` is the PNG of the window titled with the file, from
+  a new instance launched with a `-BQLLaunch bql-<uuid>` argument. The CLI
+  finds that instance by the token, so it never adopts or ends another one. It
+  captures the window `--settle` seconds after the instance's `load` signpost
+  intervals end. A `log stream` started before the launch records them to
+  `app-loads.ndjson`. A load that has not ended 15 s after the window appears,
+  an instance that exits before the capture and a window with another title are
+  each a problem for that file.
 - A thumbnail proof is the PNG. It must show the extension's drawing: the white
   card with the format badge or strip. A generic document icon means Quick
   Look did not use the extension.
@@ -150,8 +158,9 @@ bql cleanup
 
 Cleanup stops only what `bql` started, as listed in
 `build.noindex/verify/state.json`: `qlmanage` PIDs whose command line still
-matches, app instance PIDs from `bql hostile` that still run the installed
-app, Finder windows by id, and the host app window if `bql install` opened it.
+matches, app instance PIDs from `bql hostile` whose command line still has
+their launch token, Finder windows by id, and the host app window if
+`bql install` opened it.
 It then deletes `build.noindex/verify/fixtures`. The evidence folder stays,
 and the JSON lists the runs it kept. Never kill Quick Look, Finder or
 extension processes by name. The only extension kill is the exact PID that
