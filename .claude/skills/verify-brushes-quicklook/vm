@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Run bql inside a headless Tart macOS VM, so a verify run never touches the host's installed app.
+
+One VM per checkout per image, and each VM holds one installed build. Every subcommand prints one JSON object on
+stdout like bql. `vm run` passes bql's own JSON and exit code through.
+"""
+
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+from pathlib import Path
+
+loader = importlib.machinery.SourceFileLoader("bql", str(Path(__file__).resolve().with_name("bql")))
+bql = importlib.util.module_from_spec(importlib.util.spec_from_loader("bql", loader))
+loader.exec_module(bql)
+emit, Fail, ArgumentParser, note, run = bql.emit, bql.Fail, bql.ArgumentParser, bql.note, bql.run
+REPO, BUILD, WORK = bql.REPO, bql.BUILD, bql.WORK
+
+IMAGES = {"tahoe": "ghcr.io/cirruslabs/macos-tahoe-base:latest",
+          "sonoma": "ghcr.io/cirruslabs/macos-sonoma-base:latest"}
+GUEST_REPO = "/Users/admin/brushes-quicklook"
+BOOT_TIMEOUT = 180
+LIMIT_FIX = ("Apple allows two running macOS VMs on a host. Stop one you own with `tart stop <name>` and rerun "
+             "`vm up`. Leave VMs of other sessions running.")
+
+# The copy goes through `tart exec -i` because a `tart run --dir` shared folder served stale content after the host
+# replaced a file. bql's state and evidence move into the new copy, so a sync keeps them.
+GUEST_SYNC = """
+set -eu
+repo=$1
+rm -rf "$repo.new"
+mkdir -p "$repo.new/build.noindex"
+tar -x -f - -C "$repo.new"
+if [ -d "$repo/build.noindex/verify" ]; then
+    mv "$repo/build.noindex/verify" "$repo.new/build.noindex/verify"
+fi
+rm -rf "$repo"
+mv "$repo.new" "$repo"
+cd "$repo"
+git init -q
+git add -A
+"""
+
+HOST_BUILD = [
+    ["xcodegen", "generate"],
+    ["xcodebuild", "-project", "BrushesQuickLook.xcodeproj", "-scheme", "BrushesQuickLook", "-configuration", "Release",
+     "ONLY_ACTIVE_ARCH=NO", "-derivedDataPath", "build.noindex", "-quiet", "build"],
+    ["scripts/check-build.sh", str(BUILD)],
+]
+
+
+def vm_name(image):
+    return re.sub(r"[^A-Za-z0-9.-]", "-", f"bql-{REPO.name}-{image}")
+
+
+def vm_dir(name):
+    return WORK / "vm" / name
+
+
+def vms():
+    return json.loads(run(["tart", "list", "--format", "json"], check=True).stdout)
+
+
+def local_vm(name):
+    return next((vm for vm in vms() if vm["Name"] == name and vm["Source"] == "local"), None)
+
+
+def running(image):
+    name = vm_name(image)
+    vm = local_vm(name)
+    if not vm or vm["State"] != "running":
+        raise Fail(f"VM {name} is {vm['State'] if vm else 'missing'}",
+                   f"Run `vm up --image {image}`." if vm else f"Run `vm setup --image {image}`, then `vm up --image {image}`.")
+    return name
+
+
+def guest_ready(name):
+    try:
+        return run(["tart", "exec", name, "true"], timeout=10).returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def cmd_setup(args):
+    name = vm_name(args.image)
+    created = local_vm(name) is None
+    if created:
+        note(f"cloning {IMAGES[args.image]} into {name}")
+        run(["tart", "clone", IMAGES[args.image], name], timeout=3600, check=True)
+    emit({"ok": True, "vm": name, "image": IMAGES[args.image], "created": created, "next": "Run `vm up`."})
+
+
+def cmd_up(args):
+    name = vm_name(args.image)
+    vm = local_vm(name)
+    if vm is None:
+        raise Fail(f"No VM named {name}", f"Run `vm setup --image {args.image}`.")
+    if vm["State"] == "running":
+        emit({"ok": True, "vm": name, "already_running": True})
+    log = vm_dir(name) / "tart-run.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    started = time.time()
+    note(f"booting {name}")
+    with log.open("w") as out:
+        tart = subprocess.Popen(["tart", "run", "--no-graphics", name], stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+    while time.time() - started < BOOT_TIMEOUT:
+        if tart.poll() is not None:
+            emit({"ok": False, "vm": name, "log": str(log),
+                  "running_vms": sorted(other["Name"] for other in vms() if other["State"] == "running"),
+                  "error": f"tart run exited {tart.returncode}: {log.read_text().strip()}", "fix": LIMIT_FIX}, 1)
+        if guest_ready(name):
+            emit({"ok": True, "vm": name, "boot_seconds": round(time.time() - started, 1), "next": "Run `vm sync`."})
+        time.sleep(0.5)
+    emit({"ok": False, "vm": name, "log": str(log),
+          "error": f"The guest agent did not answer `tart exec` within {BOOT_TIMEOUT} s: "
+                   f"{log.read_text().strip()[-2000:]}",
+          "fix": f"Read {log}, run `vm down` and `vm up` again."}, 1)
+
+
+def cmd_sync(args):
+    name = running(args.image)
+    note("building Release on the host, this takes a few minutes")
+    for command in HOST_BUILD:
+        proc = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=1800)
+        if proc.returncode != 0:
+            emit({"ok": False, "failed_step": command[0],
+                  "error": (proc.stderr.strip() or proc.stdout.strip())[-2000:],
+                  "fix": f"Run `{' '.join(command)}` in {REPO} to see the full output."}, 1)
+    listed = run(["git", "-C", str(REPO), "ls-files", "-z", "-c", "-o", "--exclude-standard"], check=True).stdout
+    files = [f for f in listed.split("\0") if f and os.path.lexists(REPO / f)]
+    note(f"copying {len(files)} files and the Release build into {name}")
+    with tempfile.NamedTemporaryFile() as names:
+        names.write(b"\0".join(map(os.fsencode, [*files, str(BUILD.relative_to(REPO))])))
+        names.flush()
+        tar = subprocess.Popen(["tar", "-c", "-f", "-", "-C", str(REPO), "--null", "-T", names.name],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        guest = subprocess.run(["tart", "exec", "-i", name, "sh", "-c", GUEST_SYNC, "sh", GUEST_REPO],
+                               stdin=tar.stdout, capture_output=True, text=True, timeout=600)
+        tar.stdout.close()
+        tar_error = tar.stderr.read().decode().strip()
+        tar.wait()
+    if tar.returncode != 0 or guest.returncode != 0:
+        raise Fail(f"Copy into {name} failed: {tar_error or guest.stderr.strip() or guest.stdout.strip()}",
+                   "Check that the VM is up with `vm up`, then rerun `vm sync`.")
+    emit({"ok": True, "vm": name, "guest_repo": GUEST_REPO, "files": len(files),
+          "release_build": {kind: bql.cdhash(path) for kind, path in bql.bundles(BUILD).items()},
+          "next": "Run `vm run install --no-build`."})
+
+
+def cmd_run(args):
+    name = running(args.image)
+    script = f'cd {GUEST_REPO} && exec .claude/skills/verify-brushes-quicklook/bql "$@"'
+    sys.exit(subprocess.run(["tart", "exec", name, "sh", "-c", script, "sh", *args.bql]).returncode)
+
+
+def cmd_evidence(args):
+    name = running(args.image)
+    verify = f"{GUEST_REPO}/build.noindex/verify"
+    runs = sorted(run(["tart", "exec", name, "ls", f"{verify}/evidence"]).stdout.split())
+    if not runs:
+        emit({"ok": False, "vm": name, "error": f"The guest has no evidence in {verify}/evidence yet",
+              "fix": "Drive a check first, for example `vm run thumb <file>` or `vm run preview <file>`."}, 1)
+    target = vm_dir(name)
+    target.mkdir(parents=True, exist_ok=True)
+    guest = subprocess.Popen(["tart", "exec", name, "tar", "-c", "-f", "-", "-C", verify, "evidence"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    host = subprocess.run(["tar", "-x", "-f", "-", "-C", str(target)], stdin=guest.stdout, capture_output=True,
+                          text=True, timeout=600)
+    guest.stdout.close()
+    guest_error = guest.stderr.read().decode().strip()
+    guest.wait()
+    if guest.returncode != 0 or host.returncode != 0:
+        raise Fail(f"Copy from {name} failed: {guest_error or host.stderr.strip()}", "Rerun `vm evidence`.")
+    emit({"ok": True, "vm": name, "evidence_dir": str(target / "evidence"), "runs": runs})
+
+
+def cmd_down(args):
+    name = vm_name(args.image)
+    vm = local_vm(name)
+    stopped = bool(vm) and vm["State"] == "running"
+    if stopped:
+        run(["tart", "stop", name], timeout=120, check=True)
+    emit({"ok": True, "vm": name, "stopped": stopped, "state": "stopped" if vm else "missing"})
+
+
+def main():
+    parser = ArgumentParser(
+        prog="vm", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Typical run: vm setup; vm up; vm sync; vm run install --no-build; vm run doctor; vm run fixtures; "
+               "vm run thumb <file>; vm run preview <file>; vm evidence; vm down")
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name, help_text in [
+        ("setup", "clone the image into this checkout's VM unless it exists"),
+        ("up", "boot the VM headless and wait for its guest agent, fail fast when Tart cannot start it"),
+        ("sync", "build Release on the host and copy the checkout and the build into the guest"),
+        ("run", "run bql in the guest with the arguments that follow, passing its output and exit code through"),
+        ("evidence", "copy the guest's bql evidence to build.noindex/verify/vm/<vm>/evidence on the host"),
+        ("down", "stop the VM"),
+    ]:
+        command = sub.add_parser(name, help=help_text)
+        command.add_argument("--image", choices=sorted(IMAGES), default="tahoe", help="guest macOS (default tahoe)")
+        if name == "run":
+            command.add_argument("bql", nargs=argparse.REMAINDER, help="bql subcommand and its arguments")
+    args = parser.parse_args()
+    try:
+        globals()[f"cmd_{args.command}"](args)
+    except Fail as failure:
+        emit({"ok": False, "error": failure.error, "fix": failure.fix}, 2)
+    except Exception as error:
+        traceback.print_exc()
+        emit({"ok": False, "error": f"{type(error).__name__}: {error}",
+              "fix": "vm hit an unexpected error or a hung tart command. Read the traceback on stderr."}, 2)
+
+
+if __name__ == "__main__":
+    main()
