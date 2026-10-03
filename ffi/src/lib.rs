@@ -52,6 +52,9 @@ fn reason_text(reason: UnavailableReason) -> String {
             None => "Computed Photoshop tip. Not drawn yet.".to_owned(),
         },
         UnavailableReason::Corrupt(message) => message,
+        UnavailableReason::MissingTip { .. } => {
+            "This brush's shape image is missing from the file.".to_owned()
+        }
         UnavailableReason::TooLarge { width, height } => {
             format!("The shape image is {width} × {height} px, too large to preview.")
         }
@@ -522,6 +525,12 @@ mod tests {
                 "Computed Photoshop tip. Not drawn yet.",
             ),
             (computed(""), "Computed Photoshop tip. Not drawn yet."),
+            (
+                UnavailableReason::MissingTip {
+                    uuid: "0f1e2d3c".to_owned(),
+                },
+                "This brush's shape image is missing from the file.",
+            ),
             (
                 UnavailableReason::TooLarge {
                     width: 60000,
