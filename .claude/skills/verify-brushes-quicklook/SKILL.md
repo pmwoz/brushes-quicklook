@@ -72,8 +72,8 @@ macOS 14 checks.
 
 One VM holds one installed build. Quick Look's one-registration rule applies
 inside the guest too. Each checkout gets its own VM per image, named
-`bql-<checkout folder>-<image>`, so two worktrees verify different builds at
-the same time. After every `vm sync`, run `vm run install --no-build` again.
+`bql-<checkout folder>-<path hash>-<image>`, so two worktrees verify different
+builds at the same time. After every `vm sync`, run `vm run install --no-build` again.
 A plain `vm run install` fails in the guest, because it has no `xcodegen`.
 
 Apple allows two running macOS VMs on one Mac, and other work may hold one of

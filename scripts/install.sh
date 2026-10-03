@@ -29,11 +29,10 @@ lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchSe
 extensions='Preview Thumbnail'
 
 if [ "$build" = yes ]; then
-    observed=$(xcodegen generate 2>&1) || fail build "$observed"
-    observed=$(xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesQuickLook \
-        -configuration Release ONLY_ACTIVE_ARCH=NO -derivedDataPath build.noindex -quiet build 2>&1) \
-        || fail build "$observed"
+    observed=$(scripts/build.sh 2>&1) || fail build "$observed"
     printf 'ok build\n'
+elif [ ! -d "$app" ]; then
+    fail build "--no-build needs a Release build at $app"
 fi
 
 observed=$(scripts/check-build.sh "$app" 2>&1) || fail check-build "$observed"

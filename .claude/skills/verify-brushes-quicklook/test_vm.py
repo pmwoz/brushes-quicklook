@@ -34,7 +34,7 @@ class FakeTartTest(unittest.TestCase):
 case $1 in
     list) printf '%s\\n' '{json.dumps(listed)}' ;;
     run) printf '%s\\n' '{LIMIT}' >&2; exit 1 ;;
-    exec) shift; printf '%s\\n' "$@"; exit 3 ;;
+    exec) shift; printf '%s\\n' "$@" > "$FAKE_ARGV"; printf '%s' "$FAKE_STDOUT"; exit 1 ;;
 esac
 """)
         tart.chmod(0o755)
@@ -56,13 +56,59 @@ esac
         self.assertEqual(result["running_vms"], ["abr-verify", "bql-exp"])
         self.assertIn("tart stop", result["fix"])
 
-    def test_run_passes_the_bql_arguments_and_bqls_exit_code_through(self):
+    def run_vm(self, stdout):
+        env = {**self.fake_tart("running"), "FAKE_ARGV": str(self.work.parent / "argv"), "FAKE_STDOUT": stdout}
         proc = subprocess.run([sys.executable, str(VM), "run", "thumb", "x.abr", "--size", "256"],
-                              env=self.fake_tart("running"), capture_output=True, text=True, timeout=30)
-        self.assertEqual(proc.returncode, 3)
-        argv = proc.stdout.splitlines()
+                              env=env, capture_output=True, text=True, timeout=30)
+        return proc, (self.work.parent / "argv").read_text().splitlines()
+
+    def test_run_passes_the_bql_arguments_json_and_exit_code_through(self):
+        proc, argv = self.run_vm('{"ok": false}')
+        self.assertEqual((proc.returncode, proc.stdout), (1, '{"ok": false}'))
         self.assertEqual(argv[0], vm.vm_name("tahoe"))
-        self.assertEqual(argv[-5:], ["sh", "thumb", "x.abr", "--size", "256"])
+        self.assertEqual(argv[-4:], ["thumb", "x.abr", "--size", "256"])
+
+    def test_run_exits_2_with_json_when_bql_did_not_run_in_the_guest(self):
+        proc, _ = self.run_vm("")
+        result = json.loads(proc.stdout)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("without bql's JSON", result["error"])
+
+
+class GuestSyncTest(unittest.TestCase):
+    """Runs the guest half of `vm sync` on this Mac against a temporary guest checkout."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.repo = self.root / "guest/brushes-quicklook"
+        source = self.root / "host"
+        (source / "scripts").mkdir(parents=True)
+        (source / "scripts/install.sh").write_text("new")
+        self.archive = self.root / "checkout.tar"
+        subprocess.run(["tar", "-c", "-f", str(self.archive), "-C", str(source), "scripts"], check=True)
+
+    def sync(self):
+        with self.archive.open("rb") as stdin:
+            subprocess.run(["sh", "-c", vm.GUEST_SYNC, "sh", str(self.repo)], stdin=stdin, check=True,
+                           capture_output=True)
+
+    def test_a_sync_replaces_the_checkout_and_keeps_bqls_state_and_evidence(self):
+        (self.repo / "build.noindex/verify/evidence/run").mkdir(parents=True)
+        (self.repo / "deleted-on-host").write_text("old")
+        self.sync()
+        self.assertEqual((self.repo / "scripts/install.sh").read_text(), "new")
+        self.assertFalse((self.repo / "deleted-on-host").exists())
+        self.assertTrue((self.repo / "build.noindex/verify/evidence/run").is_dir())
+        self.assertIn("scripts/install.sh", subprocess.run(["git", "-C", str(self.repo), "ls-files"],
+                                                           capture_output=True, text=True).stdout)
+
+    def test_a_sync_after_one_interrupted_past_the_state_move_keeps_bqls_state_and_evidence(self):
+        (self.root / "guest/brushes-quicklook.new/build.noindex/verify/evidence/run").mkdir(parents=True)
+        self.sync()
+        self.assertTrue((self.repo / "build.noindex/verify/evidence/run").is_dir())
+        self.assertFalse((self.root / "guest/brushes-quicklook.new").exists())
 
 
 if __name__ == "__main__":
