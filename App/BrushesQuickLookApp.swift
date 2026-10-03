@@ -2,6 +2,10 @@ import SwiftUI
 
 @main
 struct BrushesQuickLookApp: App {
+    static let setupWindowID = "setup"
+
+    @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
+
     private static let editingActions: Set<Selector> = [
         #selector(NSDocument.save(_:)),
         #selector(NSDocument.saveAs(_:)),
@@ -41,7 +45,7 @@ struct BrushesQuickLookApp: App {
     }
 
     var body: some Scene {
-        Window("Brushes Quick Look", id: "setup") {
+        Window("Brushes Quick Look", id: Self.setupWindowID) {
             SetupView()
         }
         .windowResizability(.contentSize)
@@ -54,5 +58,17 @@ struct BrushesQuickLookApp: App {
             }
         }
         .defaultSize(width: 760, height: 600)
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // macOS 14 opens the setup window at launch even when the launch opens files. A launch that restores
+        // saved windows is also not a default launch, but it arrives as an open-application event.
+        guard notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == false,
+              NSAppleEventManager.shared().currentAppleEvent?.eventID != kAEOpenApplication
+        else { return }
+        NSApp.windows.first { $0.identifier?.rawValue == BrushesQuickLookApp.setupWindowID }?.close()
     }
 }
