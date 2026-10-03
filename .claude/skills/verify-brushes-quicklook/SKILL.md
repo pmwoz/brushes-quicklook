@@ -72,7 +72,7 @@ bql thumb <file|dir>...             # Finder thumbnail, headless: qlmanage -x -t
 bql thumb <file> --size 64 --scale 2
 bql preview <file|dir>...           # space-bar preview in a qlmanage window, captured by window id
 bql finder <file|dir>...            # the real Finder path: new Finder window, select, space, capture panel, Escape
-bql hostile [dir|file...]           # thumbnail and preview every file, exit 1 on a crash, a capped crash-report wait, an unexercised file or too many retries
+bql hostile [dir|file...]           # thumbnail, preview and open every file in a new app instance, exit 1 on a crash, a capped crash-report wait, an unexercised file or too many retries
 bql hostile --via finder            # the same sweep through Finder
 bql logs [--last SECONDS]           # load intervals and log messages from the extensions (default 300 s)
 ```
@@ -104,9 +104,9 @@ user-facing behavior, the fixture that shows it and the observable proof.
 ## Evidence
 
 Each drive writes to `build.noindex/verify/evidence/<YYYYMMDD-HHMMSS>-<command>/`:
-PNGs under `thumb/<size>pt@<scale>x/` and `preview/`, plus `result.json`, a
-copy of the stdout JSON. The folder is in `build.noindex`, which git and
-Spotlight ignore.
+PNGs under `thumb/<size>pt@<scale>x/`, `preview/` and, for `hostile`, `app/`,
+plus `result.json`, a copy of the stdout JSON. The folder is in
+`build.noindex`, which git and Spotlight ignore.
 
 Proof standards:
 
@@ -124,6 +124,14 @@ Proof standards:
   `retry_limit` needed a second attempt. The limit is 1 plus 1 per 100 files.
   Under GitHub Actions it appends the verdict and the counts to the job
   summary.
+- An app proof in `hostile` is the PNG of the window titled with the file, from
+  a new instance launched with a `-BQLLaunch bql-<uuid>` argument. The CLI
+  finds that instance by the token, so it never adopts or ends another one. It
+  captures the window `--settle` seconds after the instance's `load` signpost
+  intervals end. A `log stream` started before the launch records them to
+  `app-loads.ndjson`. A load that has not ended 15 s after the window appears,
+  an instance that exits before the capture and a window with another title are
+  each a problem for that file.
 - A thumbnail proof is the PNG. It must show the extension's drawing: the white
   card with the format badge or strip. A generic document icon means Quick
   Look did not use the extension.
@@ -150,11 +158,13 @@ bql cleanup
 
 Cleanup stops only what `bql` started, as listed in
 `build.noindex/verify/state.json`: `qlmanage` PIDs whose command line still
-matches, Finder windows by id, and the host app window if `bql install`
-opened it. It then deletes `build.noindex/verify/fixtures`. The evidence
-folder stays, and the JSON lists the runs it kept. Never kill Quick Look,
-Finder or extension processes by name. The only extension kill is the exact
-PID that `doctor` reports as stale.
+matches, app instance PIDs from `bql hostile` whose command line still has
+their launch token, Finder windows by id, and the host app window if
+`bql install` opened it.
+It then deletes `build.noindex/verify/fixtures`. The evidence folder stays,
+and the JSON lists the runs it kept. Never kill Quick Look, Finder or
+extension processes by name. The only extension kill is the exact PID that
+`doctor` reports as stale.
 
 ## Helpers
 

@@ -13,7 +13,7 @@ never crashes either extension.
 - `error-damaged` shows the warning view with "The file looks damaged or incomplete." and a Details disclosure holding the parser's message.
 - `error-partial` shows the brushes loaded when the 10 s limit stops a load, plus `N more brushes were not loaded. Previews stop loading after 10 seconds.`
 - `error-too-large` shows "This file is 600 MB. Files above 512 MB are not previewed." with no Details, and the thumbnail shows a brush glyph.
-- `error-no-crash` means no hostile file produces a `BrushesPreview` or `BrushesThumbnail` crash report.
+- `error-no-crash` means no hostile file produces a `BrushesPreview`, `BrushesThumbnail` or `BrushesQuickLook` crash report.
 
 ## How to get to it (user POV)
 
@@ -41,11 +41,16 @@ Preconditions:
   and `bql preview build.noindex/verify/fixtures/too_large.abr`. The thumbnail
   shows the brush glyph and the preview shows the 600 MB message. `bql cleanup`
   deletes the file.
-- **No crash.** Run `bql hostile`. Exit 0 with `crashed: 0`, `unexercised: []`
-  and `retried` at most `retry_limit` across the whole corpus. With `BQL_REAL_FILES` set, the sweep includes those files too.
+- **No crash.** Run `bql hostile`. It thumbnails and previews each file and
+  opens it in a new `BrushesQuickLook` instance, which it captures once the
+  load ends. Exit 0 with `crashed: 0`,
+  `unexercised: []` and `retried` at most `retry_limit` across the whole corpus. With `BQL_REAL_FILES` set, the sweep includes those files too.
 - **Proof.** The PNGs and the `result.json` of the `hostile` run. The run is
   proven to fail: a `SIGSEGV` sent to its own extension process gave exit 1
-  and one report with `likely_file`. The cap alone is proven to fail a run.
+  and one report with `likely_file`. During `bql hostile small_tip.abr ordered_set.brushset`,
+  a `SIGSEGV` sent to the second app instance gave exit 1, one
+  `BrushesQuickLook` report with `likely_file` `ordered_set.brushset`, and the
+  row problem "the app exited while it showed the file". The cap alone is proven to fail a run.
   During the crash wait of a `bql thumb` run, a new `Brushes*` report with a
   `captureTime` inside the run, written every 10 s for 100 s and deleted 5 s
   after each write, gave exit 1 with `crash_wait_capped: true` and an empty

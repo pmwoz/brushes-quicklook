@@ -14,7 +14,9 @@ import subprocess
 import sys
 import time
 import traceback
+import uuid
 from bisect import bisect_right
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -42,7 +44,7 @@ ObjC.import("CoreGraphics");
 const list = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(
     $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID)));
 JSON.stringify(list.map(w => ({id: w.kCGWindowNumber, pid: w.kCGWindowOwnerPID,
-    owner: w.kCGWindowOwnerName, layer: w.kCGWindowLayer, bounds: w.kCGWindowBounds})));
+    owner: w.kCGWindowOwnerName, name: w.kCGWindowName, layer: w.kCGWindowLayer, bounds: w.kCGWindowBounds})));
 """
 
 OPEN_FINDER_WINDOW = """
@@ -106,9 +108,10 @@ def osascript(script, *args, language="AppleScript"):
 # State: what this CLI started, so cleanup kills exactly that and nothing else.
 
 def load_state():
+    state = {"qlmanage": [], "finder_windows": [], "app": [], "host_app_opened": False}
     if STATE.exists():
-        return json.loads(STATE.read_text())
-    return {"qlmanage": [], "finder_windows": [], "host_app_opened": False}
+        state |= json.loads(STATE.read_text())
+    return state
 
 
 def save_state(state):
@@ -217,7 +220,7 @@ def crash_verdict(crashes, capped, vanished):
     if crashes:
         failures.append((f"Brushes crash reports from this run: {len(crashes)}",
                          "Open each report in `new_crash_reports`, find the crashing frame and fix it. "
-                         "The extensions must never crash on a hostile file."))
+                         "The app and the extensions must never crash on a hostile file."))
     if capped and vanished:
         failures.append((f"Brushes crash reports that restarted the crash wait until its {CRASH_WAIT_CAP} s cap, "
                          f"then were deleted or finished writing with a captureTime before the run: {len(vanished)}. "
@@ -263,12 +266,46 @@ def log_since(start, predicate, signposts=False):
             if "eventMessage" in event]
 
 
+@contextmanager
+def log_stream(log, *args):
+    """Appends `log stream` ndjson to `log` until the block ends. Yields a check that fails once the stream exits."""
+    size = log.stat().st_size if log.exists() else 0
+    with log.open("a") as out:
+        stream = subprocess.Popen(["/usr/bin/log", "stream", "--style", "ndjson", *args],
+                                  stdout=out, stderr=subprocess.PIPE, text=True)
+
+    def check():
+        if stream.poll() is not None:
+            raise Fail(f"`log stream` exited with status {stream.returncode}: {stream.stderr.read().strip()}",
+                       "Run `log stream` by hand to see why it fails.")
+
+    try:
+        wait_for(lambda: stream.poll() is not None or log.stat().st_size > size, timeout=10)
+        check()
+        if log.stat().st_size == size:
+            raise Fail("`log stream` printed nothing within 10 s", "Run `log stream` by hand to see why it fails.")
+        yield check
+    finally:
+        stream.terminate()
+        stream.wait()
+
+
+def streamed(log):
+    return [json.loads(line) for line in log.read_text().splitlines(keepends=True)
+            if line.startswith("{") and line.endswith("\n")]
+
+
 def extension_requests(log):
     """BrushesPreview logs this activity once per preview request, from Finder and qlmanage alike."""
-    events = [json.loads(line) for line in log.read_text().splitlines(keepends=True)
-              if line.startswith("{") and line.endswith("\n")]
     return [(datetime.strptime(e["timestamp"], "%Y-%m-%d %H:%M:%S.%f%z").timestamp(),
-             {"pid": e.get("processID"), "binary": e.get("processImagePath")}) for e in events if "eventMessage" in e]
+             {"pid": e.get("processID"), "binary": e.get("processImagePath")}) for e in streamed(log)
+            if "eventMessage" in e]
+
+
+def load_ended(log, pid):
+    """The app parses a file inside a `load` signpost interval, and a single brush nests a second one inside it."""
+    kinds = [e.get("signpostType") for e in streamed(log) if e.get("processID") == pid]
+    return kinds.count("begin") > 0 and kinds.count("begin") == kinds.count("end")
 
 
 # Drivers. Each exercises one file through the real extension and returns what it saw.
@@ -352,28 +389,101 @@ def preview_with_finder(file, png, settle):
         untrack("finder_windows", window_id)
 
 
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def open_in_app(file, run_dir, settle):
+    # `open -n` starts a new instance even when one runs, so ending it leaves the setup window and the user's
+    # instances alone. Ignoring the saved state stops a relaunch after a crash from restoring earlier windows.
+    # The token in its arguments tells this instance apart from any other that starts meanwhile.
+    token = f"bql-{uuid.uuid4()}"
+    png = run_dir / "app" / f"{file.name}.png"
+    log = run_dir / "app-loads.ndjson"
+    instance = {}
+
+    def find_instance():
+        if not instance and (pids := run(["pgrep", "-f", "--", token]).stdout.split()):
+            instance.update(pid=int(pids[0]), file=str(file), token=token)
+            track("app", instance)
+        return instance.get("pid")
+
+    def app_windows(pid):
+        return [w for w in windows() if w["pid"] == pid and w["layer"] == 0]
+
+    def shown():
+        """The window titled with the file, or True once the instance has exited."""
+        pid = find_instance()
+        if pid is None:
+            return None
+        if not alive(pid):
+            return True
+        # Finder's hide-extension setting can drop the extension from the window title.
+        return next((w for w in app_windows(pid) if w.get("name") in (file.name, file.stem)), None)
+
+    def result(problem):
+        return {"file": str(file), "png": None if problem else str(png), "pid": instance.get("pid"),
+                "problem": problem}
+
+    try:
+        with log_stream(log, "--signpost", "--predicate",
+                        'process == "BrushesQuickLook" AND signpostName == "load"') as check_stream:
+            try:
+                proc = run(["open", "-n", "-a", str(APP), str(file),
+                            "--args", "-ApplePersistenceIgnoreState", "YES", "-BQLLaunch", token], timeout=60)
+            except subprocess.TimeoutExpired:
+                return result("open -n -a did not return within 60 s")
+            if proc.returncode != 0:
+                return result(f"open -n -a exited {proc.returncode}: {proc.stderr.strip()}")
+            window = wait_for(shown, timeout=20)
+            pid = instance.get("pid")
+            if pid is None:
+                return result("the app did not start within 20 s")
+            if window is True:
+                return result("the app exited before it showed a window")
+            if not window:
+                titles = [w.get("name") for w in app_windows(pid)]
+                if not titles:
+                    return result("the app opened no window within 20 s")
+                if not any(titles):
+                    return result("the app's windows have no titles. Grant Screen Recording to the app running "
+                                  "this shell in System Settings > Privacy & Security")
+                return result(f"the app opened no window titled {file.name} within 20 s, only {titles}")
+            # The window shows "Loading brushes…" until the load ends, which LoadBudget caps at 10 s plus 1 s of grace.
+            wait_for(lambda: check_stream() or load_ended(log, pid) or not alive(pid), timeout=15)
+            if alive(pid) and not load_ended(log, pid):
+                return result("the app did not finish loading the file within 15 s")
+            time.sleep(settle)
+            try:
+                capture(window["id"], png)
+            except Fail:
+                if alive(pid):
+                    raise
+                return result("the app exited while it showed the file")
+            return result(None)
+    finally:
+        if (pid := find_instance()) is not None:
+            try:
+                os.kill(pid, 15)
+                if not wait_for(lambda: not alive(pid), timeout=5):
+                    os.kill(pid, 9)
+            except ProcessLookupError:
+                pass
+            untrack("app", instance)
+
+
 DRIVERS = {"qlmanage": preview_with_qlmanage, "finder": preview_with_finder}
 
 
 def drive_previews(files, run_dir, settle, via):
     # On a hosted runner `log show` lost this activity for up to half of the previews. A live stream kept all of them.
     log = run_dir / "preview-requests.ndjson"
-    size = log.stat().st_size if log.exists() else 0
-    with log.open("a") as out:
-        stream = subprocess.Popen(["/usr/bin/log", "stream", "--style", "ndjson", "--predicate",
-                                   'process == "BrushesPreview" AND eventMessage == "beginning extension request"'],
-                                  stdout=out, stderr=subprocess.PIPE, text=True)
-
-    def check_stream():
-        if stream.poll() is not None:
-            raise Fail(f"`log stream` exited with status {stream.returncode}: {stream.stderr.read().strip()}",
-                       "Run `log stream` by hand to see why it fails.")
-
-    try:
-        wait_for(lambda: stream.poll() is not None or log.stat().st_size > size, timeout=10)
-        check_stream()
-        if log.stat().st_size == size:
-            raise Fail("`log stream` printed nothing within 10 s", "Run `log stream` by hand to see why it fails.")
+    with log_stream(log, "--predicate",
+                    'process == "BrushesPreview" AND eventMessage == "beginning extension request"') as check_stream:
         results = []
         for file in files:
             # On a hosted runner about 1 in 300 qlmanage runs never gets the extension's view: the extension starts
@@ -395,12 +505,9 @@ def drive_previews(files, run_dir, settle, via):
                     for began, ended, _ in results]
 
         # The stream writes an event a moment after it happens.
-        wait_for(lambda: stream.poll() is not None
+        wait_for(lambda: check_stream()
                  or all(process or not result["png"] for process, (_, _, result) in zip(served(), results)), timeout=5)
         check_stream()
-    finally:
-        stream.terminate()
-        stream.wait()
     for process, (_, _, result) in zip(served(), results):
         result["extension"] = process
         if result["png"] and not process:
@@ -590,10 +697,12 @@ def cmd_hostile(args):
         started.append(time.time())
         thumbnail = render_thumbnail(file, 256, 1, run_dir / "thumb")
         preview = drive_previews([file], run_dir, args.settle, args.via)[0]
+        app = open_in_app(file, run_dir, args.settle)
         rows.append({"file": str(file), "thumbnail_png": thumbnail["png"], "preview_png": preview["png"],
                      "extension": preview["extension"], "attempts": preview["attempts"],
+                     "app_png": app["png"], "app_pid": app["pid"],
                      "problems": [p for p in [None if thumbnail["png"] else "no thumbnail: " + thumbnail["qlmanage"],
-                                              preview["problem"]] if p]})
+                                              preview["problem"], app["problem"]] if p]})
     crashes, capped, vanished = wait_for_new_crashes(before, started[0])
     for crash in crashes:
         i = bisect_right(started, crash["time"]) if crash["time"] is not None else 0
@@ -603,7 +712,7 @@ def cmd_hostile(args):
     if unexercised:
         failures.append((f"{len(unexercised)} of {len(rows)} files were not exercised",
                          "Read the `problems` of each file in `unexercised` under `results`. "
-                         "Run `bql doctor` to check that both extensions are installed and registered."))
+                         "Run `bql doctor` to check that the app and both extensions are installed and registered."))
     retried = sum(row["attempts"] > 1 for row in rows)
     # Drills measured 6 retries in 3381 previews. More than this limit points at a new hang before preparePreviewOfFile.
     # It is tuned for the small corpus in CI and lenient on large sweeps.
@@ -667,12 +776,20 @@ def cmd_logs(args):
 
 def cmd_cleanup(args):
     state = load_state()
-    killed, closed = [], []
+    killed, ended, closed = [], [], []
     for record in state["qlmanage"]:
         command = run(["ps", "-p", str(record["pid"]), "-o", "command="]).stdout.strip()
         if command.startswith("qlmanage -p") and record["file"] in command:
             os.kill(record["pid"], 15)
             killed.append(record)
+    for record in state["app"]:
+        # A pid that no longer carries the token is another process that reused it.
+        if record.get("token") and record["token"] in run(["ps", "-o", "command=", "-p", str(record["pid"])]).stdout:
+            try:
+                os.kill(record["pid"], 15)
+                ended.append(record)
+            except ProcessLookupError:
+                pass
     for window_id in state["finder_windows"]:
         if osascript(CLOSE_FINDER_WINDOW, window_id).stdout.strip() not in ("", "0"):
             closed.append(window_id)
@@ -682,8 +799,8 @@ def cmd_cleanup(args):
     shutil.rmtree(FIXTURES, ignore_errors=True)
     STATE.unlink(missing_ok=True)
     runs = sorted(p.name for p in EVIDENCE.iterdir()) if EVIDENCE.is_dir() else []
-    emit({"ok": True, "killed_qlmanage": killed, "closed_finder_windows": closed, "quit_host_app": quit_app,
-          "removed": str(FIXTURES), "evidence_dir": str(EVIDENCE), "evidence_runs_kept": runs})
+    emit({"ok": True, "killed_qlmanage": killed, "ended_app_instances": ended, "closed_finder_windows": closed,
+          "quit_host_app": quit_app, "removed": str(FIXTURES), "evidence_dir": str(EVIDENCE), "evidence_runs_kept": runs})
 
 
 def main():
@@ -704,14 +821,15 @@ def main():
         command = sub.add_parser(name, help=help_text)
         command.add_argument("files", nargs="+", help="brush files or folders of them")
         command.add_argument("--settle", type=float, default=2, help="seconds to wait after the window appears")
-    hostile = sub.add_parser("hostile", help="thumbnail and preview every file, "
+    hostile = sub.add_parser("hostile", help="thumbnail, preview and open in a new app instance every file, "
                              "fail on a crash, a capped crash-report wait, an unexercised file or too many retries")
     hostile.add_argument("paths", nargs="*", help=f"files or folders (default: the fixture corpus and ${REAL_FILES_ENV})")
     hostile.add_argument("--via", choices=sorted(DRIVERS), default="qlmanage", help="preview driver (default qlmanage)")
     hostile.add_argument("--settle", type=float, default=2, help="seconds to wait after the window appears")
     logs = sub.add_parser("logs", help="per-load read/parse/tips intervals and extension log messages from the unified log")
     logs.add_argument("--last", type=float, default=300, help="seconds of log to read (default 300)")
-    sub.add_parser("cleanup", help="kill the qlmanage and Finder windows bql started, delete fixtures, keep evidence")
+    sub.add_parser("cleanup", help="kill the qlmanage, app instances and Finder windows bql started, delete fixtures, "
+                   "keep evidence")
     args, extra = parser.parse_known_args()
     if extra:
         sub.choices[args.command].error(f"unrecognized arguments: {' '.join(extra)}")

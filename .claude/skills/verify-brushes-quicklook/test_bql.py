@@ -5,7 +5,7 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import nullcontext, redirect_stderr, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -172,6 +172,11 @@ def previews(problem=None, attempts=1):
                                                 for f in files]
 
 
+def app_windows(problem=None):
+    return lambda file, run_dir, settle: {"file": str(file), "png": None if problem else "x.png", "pid": 200,
+                                      "problem": problem}
+
+
 def crash_wait(crashed=False, capped=False, vanished=()):
     crash = {"report": "BrushesThumbnail-1.ips", "process": "BrushesThumbnail", "time": 2e9}
     return lambda before, since: ([dict(crash)] if crashed else [], capped, set(vanished))
@@ -255,18 +260,18 @@ class ExitContractTest(unittest.TestCase):
                  {"wait_for_new_crashes": quiet, "drive_previews": previews("no window")}),
             ]
         hostile = ("hostile", brush, brush, *settle)
+        drives = {"render_thumbnail": thumbnails(), "drive_previews": previews(), "open_in_app": app_windows()}
         rows += [
-            (hostile, "crash reports from this run: 1",
-             {"wait_for_new_crashes": crashed, "render_thumbnail": thumbnails(), "drive_previews": previews()}),
-            (hostile, "Reports kept arriving",
-             {"wait_for_new_crashes": capped, "render_thumbnail": thumbnails(), "drive_previews": previews()}),
+            (hostile, "crash reports from this run: 1", {**drives, "wait_for_new_crashes": crashed}),
+            (hostile, "Reports kept arriving", {**drives, "wait_for_new_crashes": capped}),
             (hostile, "2 of 2 files were not exercised",
-             {"wait_for_new_crashes": quiet, "render_thumbnail": thumbnails(png=False), "drive_previews": previews()}),
+             {**drives, "wait_for_new_crashes": quiet, "render_thumbnail": thumbnails(png=False)}),
             (hostile, "2 of 2 files were not exercised",
-             {"wait_for_new_crashes": quiet, "render_thumbnail": thumbnails(),
-              "drive_previews": previews("no window")}),
+             {**drives, "wait_for_new_crashes": quiet, "drive_previews": previews("no window")}),
+            (hostile, "2 of 2 files were not exercised",
+             {**drives, "wait_for_new_crashes": quiet, "open_in_app": app_windows("no window")}),
             (hostile, "above the limit of 1",
-             {"wait_for_new_crashes": quiet, "render_thumbnail": thumbnails(), "drive_previews": previews(attempts=2)}),
+             {**drives, "wait_for_new_crashes": quiet, "drive_previews": previews(attempts=2)}),
             (("doctor",), "installed failed", self.doctor(installed=False)),
             (("doctor",), "release-build failed", self.doctor(built=False)),
         ]
@@ -296,7 +301,8 @@ class ExitContractTest(unittest.TestCase):
             (("preview", brush, *settle), {"wait_for_new_crashes": crash_wait(), "drive_previews": previews()}),
             (("finder", brush, *settle), {"wait_for_new_crashes": crash_wait(), "drive_previews": previews()}),
             (("hostile", brush, brush, *settle),
-             {"wait_for_new_crashes": crash_wait(), "render_thumbnail": thumbnails(), "drive_previews": previews()}),
+             {"wait_for_new_crashes": crash_wait(), "render_thumbnail": thumbnails(), "drive_previews": previews(),
+              "open_in_app": app_windows()}),
         ]:
             with self.subTest(command=argv[0]):
                 code, result = run_bql(*argv, **self.stubs, **stubs)
@@ -329,6 +335,94 @@ class ExitContractTest(unittest.TestCase):
         code, result = run_bql("thumb", self.brush, new_run=mock.Mock(side_effect=TimeoutError("hung")))
         self.assertEqual((code, result["ok"], bool(result.get("error")), bool(result.get("fix"))),
                          (2, False, True, True))
+
+
+class OpenInAppTest(unittest.TestCase):
+    START = 1_800_000_000
+
+    def open(self, dies=False, load=("begin", "end")):
+        """Pid 100 is an instance that ran before. `open` starts 200, the new instance, and 300, an instance of the
+        same app that someone else starts during the call. Only 200 has the token, and 300 starts a load too."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        running, signals, launched, now = {100}, [], {}, [self.START]
+
+        @contextmanager
+        def log_stream(log, *args):
+            launched["log"] = log
+            yield lambda: None
+
+        def run(args, timeout=120, check=False):
+            if args[0] == "open":
+                launched["token"] = args[-1]
+                running.update({200, 300})
+                events = [(300, "begin"), *((200, kind) for kind in load)]
+                launched["log"].write_text("".join(
+                    json.dumps({"processID": pid, "signpostName": "load", "signpostType": kind}) + "\n"
+                    for pid, kind in events))
+            if args[0] == "pgrep":
+                return SimpleNamespace(stdout="200\n" if args[-1] == launched.get("token") and 200 in running else "")
+            return SimpleNamespace(returncode=0, stderr="")
+
+        def sleep(seconds):
+            now[0] += seconds
+            if dies:
+                running.discard(200)
+
+        def kill(pid, signal):
+            if signal:
+                signals.append((pid, signal))
+            if pid not in running:
+                raise ProcessLookupError(pid)
+            if signal:
+                running.discard(pid)
+
+        def windows():
+            return [w for w in [{"id": 1, "pid": 100, "layer": 0, "name": "Brushes Quick Look"},
+                                {"id": 7, "pid": 200, "layer": 0, "name": "a"}] if w["pid"] in running]
+
+        def vanished(window_id, png):
+            raise bql.Fail("screencapture failed: could not create image from window", "")
+
+        capture = mock.Mock(side_effect=lambda window_id, png: 200 in running or vanished(window_id, png))
+        clock = SimpleNamespace(time=lambda: now[0], sleep=sleep)
+        with mock.patch.multiple(bql, run=run, windows=windows, capture=capture, log_stream=log_stream, time=clock,
+                                 WORK=Path(tmp.name), STATE=Path(tmp.name) / "state.json"), \
+                mock.patch.object(bql.os, "kill", kill):
+            result = bql.open_in_app(Path(tmp.name) / "a.abr", Path(tmp.name), 2)
+            state = bql.load_state()
+        return result, signals, running, state["app"], now[0] - self.START
+
+    def test_it_ends_only_the_instance_it_started_and_reports_one_that_died_while_showing_the_file(self):
+        for dies, problem in ((False, None), (True, "the app exited while it showed the file")):
+            with self.subTest(dies=dies):
+                result, signals, running, tracked, _ = self.open(dies)
+                self.assertEqual((result["pid"], result["problem"], bool(result["png"])), (200, problem, not dies))
+                self.assertEqual((signals, running, tracked), ([(200, 15)], {100, 300}, []))
+
+    def test_a_load_that_never_ends_is_a_problem_after_15_s(self):
+        result, signals, _, _, elapsed = self.open(load=("begin", "begin", "end"))
+        self.assertEqual((result["problem"], result["png"], elapsed, signals),
+                         ("the app did not finish loading the file within 15 s", None, 15, [(200, 15)]))
+
+
+class CleanupTest(unittest.TestCase):
+    def test_it_ends_a_tracked_app_instance_only_while_its_pid_still_has_the_token(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        work = Path(tmp.name)
+        mine = {"pid": 200, "file": "a.abr", "token": "bql-a"}
+        reused = {"pid": 300, "file": "b.abr", "token": "bql-b"}
+        (work / "state.json").write_text(json.dumps({"app": [mine, reused]}))
+        executable = bql.APP / "Contents/MacOS/BrushesQuickLook"
+        commands = {"200": f"{executable} -ApplePersistenceIgnoreState YES -BQLLaunch bql-a\n",
+                    "300": f"{executable} -ApplePersistenceIgnoreState YES -BQLLaunch bql-c\n"}
+        signals = []
+        with mock.patch.object(bql.os, "kill", lambda pid, signal: signals.append((pid, signal))):
+            code, result = run_bql("cleanup", run=lambda args, **kwargs: SimpleNamespace(stdout=commands[args[-1]]),
+                                   WORK=work, STATE=work / "state.json", FIXTURES=work / "fixtures",
+                                   EVIDENCE=work / "evidence")
+        self.assertEqual((code, signals, result["ended_app_instances"]), (0, [(200, 15)], [mine]))
 
 
 if __name__ == "__main__":
