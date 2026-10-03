@@ -63,6 +63,10 @@ struct BrushesQuickLookApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        readDocumentsOnMainThread()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // macOS 14 opens the setup window at launch even when the launch opens files. A launch that restores
         // saved windows is also not a default launch, but it arrives as an open-application event.
@@ -70,5 +74,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               NSAppleEventManager.shared().currentAppleEvent?.eventID != kAEOpenApplication
         else { return }
         NSApp.windows.first { $0.identifier?.rawValue == BrushesQuickLookApp.setupWindowID }?.close()
+    }
+
+    /// SwiftUI's document class lets NSDocumentController read documents on parallel threads. On macOS 14
+    /// those threads race on AppKit's document opening session and can crash the app. A brush document
+    /// reads nothing, so the class is made to read on the main thread instead.
+    private func readDocumentsOnMainThread() {
+        let selector = #selector(NSDocument.canConcurrentlyReadDocuments(ofType:))
+        let type = BrushDocument.readableContentTypes[0].identifier
+        guard let documentClass = NSDocumentController.shared.documentClass(forType: type),
+              let metaclass = object_getClass(documentClass),
+              let method = class_getClassMethod(documentClass, selector)
+        else { return assertionFailure("SwiftUI's document class not found, so documents still read in parallel") }
+        let never: @convention(block) (AnyObject, NSString?) -> ObjCBool = { _, _ in false }
+        class_replaceMethod(metaclass, selector, imp_implementationWithBlock(never), method_getTypeEncoding(method))
     }
 }
