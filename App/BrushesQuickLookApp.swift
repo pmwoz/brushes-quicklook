@@ -12,6 +12,8 @@ struct BrushesQuickLookApp: App {
     ]
 
     init() {
+        // macOS 14 shows an Open panel at launch next to the setup window when this key is unset.
+        UserDefaults.standard.register(defaults: ["NSShowAppCentricOpenPanelInsteadOfUntitledFile": false])
         Task {
             let additions = NotificationCenter.default.notifications(named: NSMenu.didAddItemNotification)
             Self.removeEditingItems()
