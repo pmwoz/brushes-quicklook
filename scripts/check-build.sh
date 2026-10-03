@@ -11,6 +11,39 @@ fail() {
     exit 1
 }
 
+# Apple's required reason APIs as imported symbols and Objective-C selector names.
+required_reason_apis="_NSFileCreationDate FileTimestamp
+_NSFileModificationDate FileTimestamp
+fileModificationDate FileTimestamp
+_NSURLContentModificationDateKey FileTimestamp
+_NSURLCreationDateKey FileTimestamp
+_stat FileTimestamp
+_fstat FileTimestamp
+_fstatat FileTimestamp
+_lstat FileTimestamp
+_stat64 FileTimestamp
+_fstat64 FileTimestamp
+_lstat64 FileTimestamp
+_getattrlistbulk FileTimestamp
+_getattrlist FileTimestamp DiskSpace
+_fgetattrlist FileTimestamp DiskSpace
+_getattrlistat FileTimestamp DiskSpace
+_mach_absolute_time SystemBootTime
+systemUptime SystemBootTime
+_NSURLVolumeAvailableCapacityKey DiskSpace
+_NSURLVolumeAvailableCapacityForImportantUsageKey DiskSpace
+_NSURLVolumeAvailableCapacityForOpportunisticUsageKey DiskSpace
+_NSURLVolumeTotalCapacityKey DiskSpace
+_NSFileSystemFreeSize DiskSpace
+_NSFileSystemSize DiskSpace
+_statfs DiskSpace
+_statvfs DiskSpace
+_fstatfs DiskSpace
+_fstatvfs DiskSpace
+_statfs64 DiskSpace
+_fstatfs64 DiskSpace
+_OBJC_CLASS_\$_NSUserDefaults UserDefaults"
+
 app=${1%/}
 for bundle in "$app" \
     "$app/Contents/PlugIns/BrushesPreview.appex" \
@@ -53,10 +86,42 @@ for bundle in "$app" \
     printf 'ok %s %s\n' "$name" "${key##*.}"
 
     manifest="$bundle/Contents/Resources/PrivacyInfo.xcprivacy"
-    observed=$(plutil -extract NSPrivacyAccessedAPITypes.0.NSPrivacyAccessedAPIType raw -o - "$manifest" 2>&1) || fail privacy "$observed"
-    [ "$observed" = NSPrivacyAccessedAPICategoryFileTimestamp ] || fail privacy "$observed"
-    observed=$(plutil -extract NSPrivacyAccessedAPITypes.0.NSPrivacyAccessedAPITypeReasons.0 raw -o - "$manifest" 2>&1) || fail privacy "$observed"
-    [ "$observed" = C617.1 ] || fail privacy "$observed"
+    observed=$(plutil -lint "$manifest" 2>&1) || fail privacy "$observed"
+    declared=
+    i=0
+    while category=$(plutil -extract "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPIType" raw -o - "$manifest" 2>/dev/null); do
+        observed=$(plutil -extract "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPITypeReasons.0" raw -o - "$manifest" 2>&1) \
+            || fail privacy "$category has no reason: $observed"
+        declared="$declared ${category#NSPrivacyAccessedAPICategory}"
+        i=$((i + 1))
+    done
+    symbols=$(nm -u -j -arch all "$binary" 2>&1) || fail privacy "$symbols"
+    selectors=$(otool -arch all -v -s __TEXT __objc_methname "$binary" 2>&1) || fail privacy "$selectors"
+    observed=$(printf '%s\n%s\n' "$symbols" "$selectors" \
+        | required_reason_apis="$required_reason_apis" declared="$declared" awk '
+            BEGIN {
+                if (!split(ENVIRON["required_reason_apis"], rows, "\n")) {
+                    print "no required reason APIs"
+                    exit 1
+                }
+                for (r in rows) {
+                    n = split(rows[r], fields, " ")
+                    for (c = 2; c <= n; c++) categories[fields[1]] = categories[fields[1]] " " fields[c]
+                }
+                declared = ENVIRON["declared"] " "
+            }
+            {
+                name = $0
+                if ($0 ~ /^[0-9a-f]+[ \t]/) name = $2
+                sub(/[$]INODE64$/, "", name)
+                if (!(name in categories)) next
+                n = split(categories[name], needed, " ")
+                for (c = 1; c <= n; c++) if (index(declared, " " needed[c] " ")) next
+                message = name " needs NSPrivacyAccessedAPICategory" needed[1]
+                for (c = 2; c <= n; c++) message = message " or NSPrivacyAccessedAPICategory" needed[c]
+                print message
+                exit 1
+            }' 2>&1) || fail privacy "$observed"
     printf 'ok %s privacy\n' "$name"
 done
 
