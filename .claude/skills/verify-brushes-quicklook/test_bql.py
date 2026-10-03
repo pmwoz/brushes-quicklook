@@ -172,6 +172,11 @@ def previews(problem=None, attempts=1):
                                                 for f in files]
 
 
+def app_windows(problem=None):
+    return lambda file, png, settle: {"file": str(file), "png": None if problem else "x.png", "pid": 200,
+                                      "problem": problem}
+
+
 def crash_wait(crashed=False, capped=False, vanished=()):
     crash = {"report": "BrushesThumbnail-1.ips", "process": "BrushesThumbnail", "time": 2e9}
     return lambda before, since: ([dict(crash)] if crashed else [], capped, set(vanished))
@@ -255,18 +260,18 @@ class ExitContractTest(unittest.TestCase):
                  {"wait_for_new_crashes": quiet, "drive_previews": previews("no window")}),
             ]
         hostile = ("hostile", brush, brush, *settle)
+        drives = {"render_thumbnail": thumbnails(), "drive_previews": previews(), "open_in_app": app_windows()}
         rows += [
-            (hostile, "crash reports from this run: 1",
-             {"wait_for_new_crashes": crashed, "render_thumbnail": thumbnails(), "drive_previews": previews()}),
-            (hostile, "Reports kept arriving",
-             {"wait_for_new_crashes": capped, "render_thumbnail": thumbnails(), "drive_previews": previews()}),
+            (hostile, "crash reports from this run: 1", {**drives, "wait_for_new_crashes": crashed}),
+            (hostile, "Reports kept arriving", {**drives, "wait_for_new_crashes": capped}),
             (hostile, "2 of 2 files were not exercised",
-             {"wait_for_new_crashes": quiet, "render_thumbnail": thumbnails(png=False), "drive_previews": previews()}),
+             {**drives, "wait_for_new_crashes": quiet, "render_thumbnail": thumbnails(png=False)}),
             (hostile, "2 of 2 files were not exercised",
-             {"wait_for_new_crashes": quiet, "render_thumbnail": thumbnails(),
-              "drive_previews": previews("no window")}),
+             {**drives, "wait_for_new_crashes": quiet, "drive_previews": previews("no window")}),
+            (hostile, "2 of 2 files were not exercised",
+             {**drives, "wait_for_new_crashes": quiet, "open_in_app": app_windows("no window")}),
             (hostile, "above the limit of 1",
-             {"wait_for_new_crashes": quiet, "render_thumbnail": thumbnails(), "drive_previews": previews(attempts=2)}),
+             {**drives, "wait_for_new_crashes": quiet, "drive_previews": previews(attempts=2)}),
             (("doctor",), "installed failed", self.doctor(installed=False)),
             (("doctor",), "release-build failed", self.doctor(built=False)),
         ]
@@ -296,7 +301,8 @@ class ExitContractTest(unittest.TestCase):
             (("preview", brush, *settle), {"wait_for_new_crashes": crash_wait(), "drive_previews": previews()}),
             (("finder", brush, *settle), {"wait_for_new_crashes": crash_wait(), "drive_previews": previews()}),
             (("hostile", brush, brush, *settle),
-             {"wait_for_new_crashes": crash_wait(), "render_thumbnail": thumbnails(), "drive_previews": previews()}),
+             {"wait_for_new_crashes": crash_wait(), "render_thumbnail": thumbnails(), "drive_previews": previews(),
+              "open_in_app": app_windows()}),
         ]:
             with self.subTest(command=argv[0]):
                 code, result = run_bql(*argv, **self.stubs, **stubs)
@@ -329,6 +335,53 @@ class ExitContractTest(unittest.TestCase):
         code, result = run_bql("thumb", self.brush, new_run=mock.Mock(side_effect=TimeoutError("hung")))
         self.assertEqual((code, result["ok"], bool(result.get("error")), bool(result.get("fix"))),
                          (2, False, True, True))
+
+
+class OpenInAppTest(unittest.TestCase):
+    def open(self, dies):
+        """Pid 100 is an instance that ran before. `open` starts 200, the new instance, and 300, another copy."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        app = str(bql.APP / "Contents/MacOS/BrushesQuickLook")
+        paths = {100: app, 200: app, 300: "/tmp/build/BrushesQuickLook.app/Contents/MacOS/BrushesQuickLook"}
+        running, signals = {100}, []
+
+        def run(args, timeout=120, check=False):
+            if args[0] == "open":
+                running.update({200, 300})
+            if args[0] == "pgrep":
+                return SimpleNamespace(stdout="\n".join(map(str, sorted(running))))
+            if args[0] == "ps":
+                return SimpleNamespace(stdout=f"{paths[int(args[-1])]}\n")
+            return SimpleNamespace(returncode=0, stderr="")
+
+        def kill(pid, signal):
+            if signal:
+                signals.append((pid, signal))
+            if pid not in running:
+                raise ProcessLookupError(pid)
+            if signal:
+                running.discard(pid)
+
+        def windows():
+            return [w for w in [{"id": 1, "pid": 100, "layer": 0, "name": "Brushes Quick Look"},
+                                {"id": 7, "pid": 200, "layer": 0, "name": "a"}] if w["pid"] in running]
+
+        capture = mock.Mock()
+        with mock.patch.multiple(bql, run=run, windows=windows, capture=capture, WORK=Path(tmp.name),
+                                 STATE=Path(tmp.name) / "state.json"), \
+                mock.patch.object(bql.os, "kill", kill), \
+                mock.patch.object(bql.time, "sleep", lambda seconds: dies and running.discard(200)):
+            result = bql.open_in_app(Path(tmp.name) / "a.abr", Path(tmp.name) / "a.png", 2)
+            state = bql.load_state()
+        return result, signals, capture.called, running, state["app"]
+
+    def test_it_ends_only_the_instance_it_started_and_reports_one_that_died_while_showing_the_file(self):
+        for dies, problem in ((False, None), (True, "the app exited while it showed the file")):
+            with self.subTest(dies=dies):
+                result, signals, captured, running, tracked = self.open(dies)
+                self.assertEqual((result["pid"], result["problem"], bool(result["png"])), (200, problem, not dies))
+                self.assertEqual((signals, captured, running, tracked), ([(200, 15)], not dies, {100, 300}, []))
 
 
 if __name__ == "__main__":

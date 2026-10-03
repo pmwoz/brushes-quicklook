@@ -42,7 +42,7 @@ ObjC.import("CoreGraphics");
 const list = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(
     $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID)));
 JSON.stringify(list.map(w => ({id: w.kCGWindowNumber, pid: w.kCGWindowOwnerPID,
-    owner: w.kCGWindowOwnerName, layer: w.kCGWindowLayer, bounds: w.kCGWindowBounds})));
+    owner: w.kCGWindowOwnerName, name: w.kCGWindowName, layer: w.kCGWindowLayer, bounds: w.kCGWindowBounds})));
 """
 
 OPEN_FINDER_WINDOW = """
@@ -106,9 +106,10 @@ def osascript(script, *args, language="AppleScript"):
 # State: what this CLI started, so cleanup kills exactly that and nothing else.
 
 def load_state():
+    state = {"qlmanage": [], "finder_windows": [], "app": [], "host_app_opened": False}
     if STATE.exists():
-        return json.loads(STATE.read_text())
-    return {"qlmanage": [], "finder_windows": [], "host_app_opened": False}
+        state |= json.loads(STATE.read_text())
+    return state
 
 
 def save_state(state):
@@ -352,6 +353,67 @@ def preview_with_finder(file, png, settle):
         untrack("finder_windows", window_id)
 
 
+def app_pids():
+    executable = str(APP / "Contents/MacOS/BrushesQuickLook")
+    return {int(pid) for pid in run(["pgrep", "-U", str(os.getuid()), "-x", "BrushesQuickLook"]).stdout.split()
+            if run(["ps", "-o", "comm=", "-p", pid]).stdout.strip() == executable}
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def open_in_app(file, png, settle):
+    # `open -n` starts a new instance even when one runs, so ending it leaves the setup window and the user's
+    # instances alone. Ignoring the saved state stops a relaunch after a crash from restoring earlier windows.
+    before = app_pids()
+    started = {}
+
+    def track_new():
+        for pid in app_pids() - before - started.keys():
+            started[pid] = {"pid": pid, "file": str(file)}
+            track("app", started[pid])
+
+    def document_window():
+        track_new()
+        # Finder's hide-extension setting can drop the extension from the window title.
+        return next((w for w in windows() if w["pid"] in started and w["layer"] == 0
+                     and w.get("name") in (file.name, file.stem)), None)
+
+    def send(signal):
+        for pid in started:
+            try:
+                os.kill(pid, signal)
+            except ProcessLookupError:
+                pass
+
+    try:
+        proc = run(["open", "-n", "-a", str(APP), str(file), "--args", "-ApplePersistenceIgnoreState", "YES"],
+                   timeout=60)
+        if proc.returncode != 0:
+            problem = f"open -n -a exited {proc.returncode}: {proc.stderr.strip()}"
+        elif not (window := wait_for(document_window, timeout=20)):
+            problem = "the app opened no window for the file within 20 s"
+        else:
+            time.sleep(settle)
+            problem = None if alive(window["pid"]) else "the app exited while it showed the file"
+            if not problem:
+                capture(window["id"], png)
+        return {"file": str(file), "png": None if problem else str(png), "pid": next(iter(started), None),
+                "problem": problem}
+    finally:
+        track_new()
+        send(15)
+        if not wait_for(lambda: not any(map(alive, started)), timeout=5):
+            send(9)
+        for record in started.values():
+            untrack("app", record)
+
+
 DRIVERS = {"qlmanage": preview_with_qlmanage, "finder": preview_with_finder}
 
 
@@ -590,10 +652,12 @@ def cmd_hostile(args):
         started.append(time.time())
         thumbnail = render_thumbnail(file, 256, 1, run_dir / "thumb")
         preview = drive_previews([file], run_dir, args.settle, args.via)[0]
+        app = open_in_app(file, run_dir / "app" / f"{file.name}.png", args.settle)
         rows.append({"file": str(file), "thumbnail_png": thumbnail["png"], "preview_png": preview["png"],
                      "extension": preview["extension"], "attempts": preview["attempts"],
+                     "app_png": app["png"], "app_pid": app["pid"],
                      "problems": [p for p in [None if thumbnail["png"] else "no thumbnail: " + thumbnail["qlmanage"],
-                                              preview["problem"]] if p]})
+                                              preview["problem"], app["problem"]] if p]})
     crashes, capped, vanished = wait_for_new_crashes(before, started[0])
     for crash in crashes:
         i = bisect_right(started, crash["time"]) if crash["time"] is not None else 0
@@ -603,7 +667,7 @@ def cmd_hostile(args):
     if unexercised:
         failures.append((f"{len(unexercised)} of {len(rows)} files were not exercised",
                          "Read the `problems` of each file in `unexercised` under `results`. "
-                         "Run `bql doctor` to check that both extensions are installed and registered."))
+                         "Run `bql doctor` to check that the app and both extensions are installed and registered."))
     retried = sum(row["attempts"] > 1 for row in rows)
     # Drills measured 6 retries in 3381 previews. More than this limit points at a new hang before preparePreviewOfFile.
     # It is tuned for the small corpus in CI and lenient on large sweeps.
@@ -667,12 +731,17 @@ def cmd_logs(args):
 
 def cmd_cleanup(args):
     state = load_state()
-    killed, closed = [], []
+    killed, ended, closed = [], [], []
     for record in state["qlmanage"]:
         command = run(["ps", "-p", str(record["pid"]), "-o", "command="]).stdout.strip()
         if command.startswith("qlmanage -p") and record["file"] in command:
             os.kill(record["pid"], 15)
             killed.append(record)
+    for record in state["app"]:
+        path = run(["ps", "-p", str(record["pid"]), "-o", "comm="]).stdout.strip()
+        if path == str(APP / "Contents/MacOS/BrushesQuickLook"):
+            os.kill(record["pid"], 15)
+            ended.append(record)
     for window_id in state["finder_windows"]:
         if osascript(CLOSE_FINDER_WINDOW, window_id).stdout.strip() not in ("", "0"):
             closed.append(window_id)
@@ -682,8 +751,8 @@ def cmd_cleanup(args):
     shutil.rmtree(FIXTURES, ignore_errors=True)
     STATE.unlink(missing_ok=True)
     runs = sorted(p.name for p in EVIDENCE.iterdir()) if EVIDENCE.is_dir() else []
-    emit({"ok": True, "killed_qlmanage": killed, "closed_finder_windows": closed, "quit_host_app": quit_app,
-          "removed": str(FIXTURES), "evidence_dir": str(EVIDENCE), "evidence_runs_kept": runs})
+    emit({"ok": True, "killed_qlmanage": killed, "ended_app_instances": ended, "closed_finder_windows": closed,
+          "quit_host_app": quit_app, "removed": str(FIXTURES), "evidence_dir": str(EVIDENCE), "evidence_runs_kept": runs})
 
 
 def main():
@@ -704,14 +773,15 @@ def main():
         command = sub.add_parser(name, help=help_text)
         command.add_argument("files", nargs="+", help="brush files or folders of them")
         command.add_argument("--settle", type=float, default=2, help="seconds to wait after the window appears")
-    hostile = sub.add_parser("hostile", help="thumbnail and preview every file, "
+    hostile = sub.add_parser("hostile", help="thumbnail, preview and open in a new app instance every file, "
                              "fail on a crash, a capped crash-report wait, an unexercised file or too many retries")
     hostile.add_argument("paths", nargs="*", help=f"files or folders (default: the fixture corpus and ${REAL_FILES_ENV})")
     hostile.add_argument("--via", choices=sorted(DRIVERS), default="qlmanage", help="preview driver (default qlmanage)")
     hostile.add_argument("--settle", type=float, default=2, help="seconds to wait after the window appears")
     logs = sub.add_parser("logs", help="per-load read/parse/tips intervals and extension log messages from the unified log")
     logs.add_argument("--last", type=float, default=300, help="seconds of log to read (default 300)")
-    sub.add_parser("cleanup", help="kill the qlmanage and Finder windows bql started, delete fixtures, keep evidence")
+    sub.add_parser("cleanup", help="kill the qlmanage, app instances and Finder windows bql started, delete fixtures, "
+                   "keep evidence")
     args, extra = parser.parse_known_args()
     if extra:
         sub.choices[args.command].error(f"unrecognized arguments: {' '.join(extra)}")
