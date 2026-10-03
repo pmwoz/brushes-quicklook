@@ -44,6 +44,10 @@ Preconditions:
   "Brushes Quick Look", 520 × 415 pt, and no Open panel appears. Run
   `screencapture -x -o -l <id> build.noindex/verify/evidence/host-app.png`. The
   PNG shows every line and both buttons from `app-window`.
+  The Open panel appeared only on macOS 14 (#114), so only a macOS 14 Mac or
+  VM proves the "no Open panel" check. Launching with
+  `open "$A" --args -NSShowAppCentricOpenPanelInsteadOfUntitledFile YES` there
+  brings the panel back.
 - **Settings button.** Run `osascript -e 'tell application "System Events" to tell process "BrushesQuickLook" to click button 1 of group 1 of window "Brushes Quick Look"'`.
   System Settings shows the Quick Look sheet over Login Items & Extensions, with
   BrushesPreview and BrushesThumbnail under BrushesQuickLook. This works whether
