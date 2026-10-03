@@ -135,6 +135,8 @@ def cmd_sync(args):
             emit({"ok": False, "failed_step": command[0],
                   "error": (proc.stderr.strip() or proc.stdout.strip())[-2000:],
                   "fix": f"Run `{' '.join(command)}` in {REPO} to see the full output."}, 1)
+    # xcodebuild registers its product with LaunchServices and pluginkit, so Quick Look on the host could route to it.
+    run([bql.LSREGISTER, "-u", str(BUILD)])
     listed = run(["git", "-C", str(REPO), "ls-files", "-z", "-c", "-o", "--exclude-standard"], check=True).stdout
     files = [f for f in listed.split("\0") if f and os.path.lexists(REPO / f)]
     note(f"copying {len(files)} files and the Release build into {name}")
