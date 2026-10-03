@@ -105,8 +105,8 @@ user-facing behavior, the fixture that shows it and the observable proof.
 
 Each drive writes to `build.noindex/verify/evidence/<YYYYMMDD-HHMMSS>-<command>/`:
 PNGs under `thumb/<size>pt@<scale>x/`, `preview/` and, for `hostile`, `app/`,
-plus `result.json`, a copy of the stdout JSON. The folder is in `build.noindex`, which git and
-Spotlight ignore.
+plus `result.json`, a copy of the stdout JSON. The folder is in
+`build.noindex`, which git and Spotlight ignore.
 
 Proof standards:
 
@@ -152,9 +152,10 @@ Cleanup stops only what `bql` started, as listed in
 `build.noindex/verify/state.json`: `qlmanage` PIDs whose command line still
 matches, app instance PIDs from `bql hostile` that still run the installed
 app, Finder windows by id, and the host app window if `bql install` opened it.
-It then deletes `build.noindex/verify/fixtures`. The evidence folder stays, and the JSON lists the runs it kept. Never kill Quick Look,
-Finder or extension processes by name. The only extension kill is the exact
-PID that `doctor` reports as stale.
+It then deletes `build.noindex/verify/fixtures`. The evidence folder stays,
+and the JSON lists the runs it kept. Never kill Quick Look, Finder or
+extension processes by name. The only extension kill is the exact PID that
+`doctor` reports as stale.
 
 ## Helpers
 

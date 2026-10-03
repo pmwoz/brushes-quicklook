@@ -367,21 +367,24 @@ class OpenInAppTest(unittest.TestCase):
             return [w for w in [{"id": 1, "pid": 100, "layer": 0, "name": "Brushes Quick Look"},
                                 {"id": 7, "pid": 200, "layer": 0, "name": "a"}] if w["pid"] in running]
 
-        capture = mock.Mock()
+        def vanished(window_id, png):
+            raise bql.Fail("screencapture failed: could not create image from window", "")
+
+        capture = mock.Mock(side_effect=lambda window_id, png: 200 in running or vanished(window_id, png))
         with mock.patch.multiple(bql, run=run, windows=windows, capture=capture, WORK=Path(tmp.name),
                                  STATE=Path(tmp.name) / "state.json"), \
                 mock.patch.object(bql.os, "kill", kill), \
                 mock.patch.object(bql.time, "sleep", lambda seconds: dies and running.discard(200)):
             result = bql.open_in_app(Path(tmp.name) / "a.abr", Path(tmp.name) / "a.png", 2)
             state = bql.load_state()
-        return result, signals, capture.called, running, state["app"]
+        return result, signals, running, state["app"]
 
     def test_it_ends_only_the_instance_it_started_and_reports_one_that_died_while_showing_the_file(self):
         for dies, problem in ((False, None), (True, "the app exited while it showed the file")):
             with self.subTest(dies=dies):
-                result, signals, captured, running, tracked = self.open(dies)
+                result, signals, running, tracked = self.open(dies)
                 self.assertEqual((result["pid"], result["problem"], bool(result["png"])), (200, problem, not dies))
-                self.assertEqual((signals, captured, running, tracked), ([(200, 15)], not dies, {100, 300}, []))
+                self.assertEqual((signals, running, tracked), ([(200, 15)], {100, 300}, []))
 
 
 if __name__ == "__main__":

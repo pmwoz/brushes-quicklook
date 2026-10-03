@@ -400,9 +400,13 @@ def open_in_app(file, png, settle):
             problem = "the app opened no window for the file within 20 s"
         else:
             time.sleep(settle)
-            problem = None if alive(window["pid"]) else "the app exited while it showed the file"
-            if not problem:
+            try:
                 capture(window["id"], png)
+                problem = None
+            except Fail:
+                if alive(window["pid"]):
+                    raise
+                problem = "the app exited while it showed the file"
         return {"file": str(file), "png": None if problem else str(png), "pid": next(iter(started), None),
                 "problem": problem}
     finally:

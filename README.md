@@ -108,8 +108,7 @@ the way a user does. `bql hostile` renders the thumbnail and the preview of
 every corpus file, and of the files in `$BQL_REAL_FILES` when it is set, and
 opens each one in the host app. It fails on a new crash report, a crash-report
 wait that hits its 120 s cap, a file it could not exercise or too many preview
-retries. CI installs the
-Release build and runs the corpus sweep. The job summary shows the sweep's
+retries. CI installs the Release build and runs the corpus sweep. The job summary shows the sweep's
 verdict, its file, crash, unexercised and retry counts, and a capped wait.
 `bql --help` lists the other commands.
 
