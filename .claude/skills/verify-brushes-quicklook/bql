@@ -596,17 +596,18 @@ def cmd_install(args):
     if args.dry_run:
         dump = run([LSREGISTER, "-dump"], timeout=120).stdout
         paths = sorted(set(re.findall(r"^\s*path:\s*(.*BrushesQuickLook\.app)\b", dump, re.M)))
+        build = [] if args.no_build else ["xcodegen generate", f"xcodebuild Release into {BUILD}"]
         emit({"ok": True, "dry_run": True, "script": str(script), "would": [
-            "xcodegen generate",
-            f"xcodebuild Release into {BUILD}",
+            *build,
             f"scripts/check-build.sh {BUILD}",
             {"unregister_from_launchservices": [p for p in paths if p != str(APP)]},
             f"quit the running app, delete {APP} and copy the Release build there",
             f"register {APP} and both extensions with lsregister and pluginkit",
             f"open {APP} (its window stays open until `bql cleanup`)",
         ]})
-    note("building Release and installing, this takes a few minutes")
-    proc = run([str(script)], timeout=1800)
+    note("installing the existing Release build" if args.no_build
+         else "building Release and installing, this takes a few minutes")
+    proc = run([str(script), *(["--no-build"] if args.no_build else [])], timeout=1800)
     steps = re.findall(r"^ok (.+)$", proc.stdout, re.M)
     failed = re.search(r"^FAIL (\S+) (.*)$", proc.stderr, re.M)
     if proc.returncode != 0:
@@ -811,6 +812,8 @@ def main():
     sub.add_parser("doctor", help="read-only: is the installed app this checkout's Release build, registered and live")
     install = sub.add_parser("install", help="build Release and install it to /Applications via scripts/install.sh")
     install.add_argument("--dry-run", action="store_true", help="list what install would change, change nothing")
+    install.add_argument("--no-build", action="store_true",
+                         help=f"install the existing Release build at {BUILD.relative_to(REPO)}, for the VM guest")
     sub.add_parser("fixtures", help=f"copy ffi/tests/corpus with brush extensions; list files in ${REAL_FILES_ENV}")
     thumb = sub.add_parser("thumb", help="render Finder thumbnails headlessly with qlmanage -x -t")
     thumb.add_argument("files", nargs="+", help="brush files or folders of them")
