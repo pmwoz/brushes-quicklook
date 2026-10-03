@@ -64,8 +64,11 @@ struct BrushesQuickLookApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // macOS 14 opens the setup window at launch even when the launch opens files.
-        guard notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == false else { return }
+        // macOS 14 opens the setup window at launch even when the launch opens files. A launch that restores
+        // saved windows is also not a default launch, but it arrives as an open-application event.
+        guard notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == false,
+              NSAppleEventManager.shared().currentAppleEvent?.eventID != kAEOpenApplication
+        else { return }
         NSApp.windows.first { $0.identifier?.rawValue == BrushesQuickLookApp.setupWindowID }?.close()
     }
 }
