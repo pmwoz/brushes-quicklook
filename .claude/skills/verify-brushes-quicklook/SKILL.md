@@ -45,7 +45,46 @@ Ready means `bql doctor` exits 0.
 Isolation: a Mac has one registered copy. Two checkouts or worktrees cannot
 verify different builds at the same time. If `doctor` shows a CDHash mismatch
 you did not cause, another session may have installed its build. Ask before
-you install over it.
+you install over it. To verify without touching the host's copy, or on another
+macOS release, use a VM. See [VM](#vm).
+
+## VM
+
+`vm` runs `bql` inside a Tart macOS VM, so a run has its own registration and
+its own Finder and leaves the host's copy alone. It needs `tart` on the host.
+The guest needs no Xcode.
+
+```
+vm setup [--image tahoe|sonoma]   # clone the cirruslabs base image into this checkout's VM, once
+vm up                             # boot it headless and wait for the guest agent
+vm sync                           # build Release on the host, unregister that build on the host, copy the checkout and the build into the guest
+vm run install --no-build         # bql install in the guest, with the host's build
+vm run doctor                     # any bql subcommand: vm run <bql args>
+vm evidence                       # copy the guest's evidence to build.noindex/verify/vm/<vm>/evidence
+vm down                           # stop the VM
+```
+
+`vm` keeps `bql`'s contract: one JSON object on stdout and exit codes 0, 1
+and 2. `vm run` prints the guest `bql`'s JSON and exits with its code. Paths
+in that JSON are guest paths. Pass `--image` before the `bql` arguments, as in
+`vm run --image sonoma doctor`. `tahoe` is the default. Use `sonoma` for
+macOS 14 checks.
+
+One VM holds one installed build. Quick Look's one-registration rule applies
+inside the guest too. Each checkout gets its own VM per image, named
+`bql-<checkout folder>-<image>`, so two worktrees verify different builds at
+the same time. After every `vm sync`, run `vm run install --no-build` again.
+A plain `vm run install` fails in the guest, because it has no `xcodegen`.
+
+Apple allows two running macOS VMs on one Mac, and other work may hold one of
+them. When the VM cannot start, `vm up` fails within seconds with Tart's
+error and the running VMs. Stop only VMs you started. `vm` never touches a VM
+other than its own.
+
+`bql` runs in the guest's logged-in session. The guest agent already has
+Screen Recording, so `vm run preview` needs no setup. `vm run finder` times
+out in the guest, see #124. `BQL_REAL_FILES` is not copied into the guest.
+Remove a VM you no longer need with `tart delete <name>`.
 
 ## Doctor
 
@@ -168,6 +207,8 @@ extension processes by name. The only extension kill is the exact PID that
 
 ## Helpers
 
-`bql` is the only helper: Python 3 standard library only, no dependencies.
-It calls `qlmanage`, `screencapture`, `osascript`, `codesign`, `pluginkit`,
-`lsregister` and `log`. `bql <subcommand> --help` shows every flag.
+`bql` and `vm` are the only helpers: Python 3 standard library only, no
+dependencies. `bql` calls `qlmanage`, `screencapture`, `osascript`, `codesign`,
+`pluginkit`, `lsregister` and `log`. `vm` calls `tart`, `tar`, `git`,
+`xcodegen` and `xcodebuild` on the host. `bql <subcommand> --help` and
+`vm <subcommand> --help` show every flag.
