@@ -32,7 +32,8 @@ bql install --dry-run   # lists the stale registrations and what would be replac
 bql install             # wraps scripts/install.sh: build, check, replace, register (a few minutes)
 ```
 
-`install` quits the running app, replaces `/Applications/BrushesQuickLook.app`,
+`install` quits the running app and fails when it is still running 10 s later,
+for example because a sheet is open. It then replaces `/Applications/BrushesQuickLook.app`,
 unregisters every other registered copy, registers the app and both
 extensions, and opens the host app window. Registering ends the app's running
 extension processes. `install` fails when a live extension process still runs
@@ -102,6 +103,9 @@ Run `bql doctor` first and whenever a result looks wrong. It changes nothing and
   checkout or a manual copy. The check reads each process's executable path and
   uses `codesign -v`, because the CDHash of a pid is read from disk. The check
   gives the exact `kill <pid>`.
+- `running-app` (warn): a live host app process runs an older binary, so
+  `open` and System Events reach the old code. Same path and `codesign -v`
+  rule as the extensions. The check gives the exact `kill <pid>`.
 
 ## Drive
 

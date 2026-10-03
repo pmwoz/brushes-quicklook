@@ -571,8 +571,10 @@ def cmd_doctor(args):
     check("launchservices", "warn" if extra else "ok", paths,
           f"Other copies are registered; Quick Look may route to them. {install_fix} unregisters them." if extra else None)
 
-    for kind, name in PLUGINS.items():
-        executable = f"Contents/PlugIns/{name}.appex/Contents/MacOS/{name}"
+    executables = {"app": "Contents/MacOS/BrushesQuickLook",
+                   **{kind: f"Contents/PlugIns/{name}.appex/Contents/MacOS/{name}" for kind, name in PLUGINS.items()}}
+    for kind, executable in executables.items():
+        name = executable.rsplit("/", 1)[1]
         for pid in run(["pgrep", "-U", str(os.getuid()), "-x", name]).stdout.split():
             path = run(["ps", "-o", "comm=", "-p", pid]).stdout.strip()
             if not path.endswith(f"BrushesQuickLook.app/{executable}"):
@@ -581,10 +583,11 @@ def cmd_doctor(args):
             verify = run(["codesign", "-v", pid])
             invalid = verify.returncode != 0 and run(["kill", "-0", pid]).returncode == 0
             stale = path != str(APP / executable) or invalid
+            restart = (f"`open` sends files to it. Run `kill {pid}`, then `open {APP}`." if kind == "app" else
+                       f"It keeps serving requests. Run `kill {pid}`; Quick Look starts a fresh one on the next request.")
             check(f"running-{kind}", "warn" if stale else "ok",
                   {"pid": int(pid), "path": path, "verify": verify.stderr.strip() if invalid else None},
-                  f"This {name} process runs an older binary and keeps serving requests. Run `kill {pid}`; "
-                  "Quick Look starts a fresh one on the next request." if stale else None)
+                  f"This {name} process runs an older binary. {restart}" if stale else None)
 
     failures = [(f"{c['check']} failed", c["fix"]) for c in checks if c["status"] == "fail"]
     emit(verdict({"repo": str(REPO), "installed_app": str(APP), "release_build": str(BUILD), "checks": checks},
@@ -601,7 +604,7 @@ def cmd_install(args):
             *build,
             f"scripts/check-build.sh {BUILD}",
             {"unregister_from_launchservices": [p for p in paths if p != str(APP)]},
-            f"quit the running app, delete {APP} and copy the Release build there",
+            f"quit the running app and wait up to 10 s for it to exit, delete {APP} and copy the Release build there",
             f"register {APP} and both extensions with lsregister and pluginkit",
             f"open {APP} (its window stays open until `bql cleanup`)",
         ]})
@@ -615,6 +618,8 @@ def cmd_install(args):
             "build": "Run the xcodebuild command from README.md to see the full compiler output.",
             "check-build": "The Release product failed a lipo, hardened runtime, sandbox or UTType check. "
                            "Run scripts/check-build.sh on it.",
+            "quit": "BrushesQuickLook did not quit, for example because a sheet or panel is open. Close it or quit "
+                    "the app, then rerun `bql install`.",
             "replace": "Check that /Applications is writable and the app is not open from a mounted image.",
             "verify": "Another copy is still registered or a live extension process runs an older binary. "
                       "Run `bql doctor`, then unregister the copy with lsregister -u or kill the PID it names.",

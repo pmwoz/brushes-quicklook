@@ -50,7 +50,26 @@ printf '%s\n' "$stale" | grep . | while IFS= read -r path; do
 done
 printf 'ok unregister %s stale paths\n' "$(printf '%s\n' "$stale" | grep -c .)"
 
-osascript -e 'tell application id "pl.esdesign.brushesquicklook" to quit' >/dev/null 2>&1 || :
+app_pids() {
+    for pid in $(pgrep -U "$(id -u)" -x BrushesQuickLook || :); do
+        case $(ps -o comm= -p "$pid" || :) in
+            "$destination/Contents/MacOS/BrushesQuickLook") printf '%s\n' "$pid" ;;
+        esac
+    done
+}
+
+# The quit reply arrives before the process exits. `open` during the exit goes to the dying process.
+quit=$(osascript -e 'tell application id "pl.esdesign.brushesquicklook" to quit' 2>&1) || :
+deadline=$(($(date +%s) + 10))
+running=$(app_pids)
+while [ -n "$running" ]; do
+    [ "$(date +%s)" -lt "$deadline" ] \
+        || fail quit "pid $(printf '%s' "$running" | tr '\n' ' ') still runs $destination 10 s after the quit request. $quit"
+    sleep 0.2
+    running=$(app_pids)
+done
+printf 'ok quit\n'
+
 rm -rf -- "$destination"
 observed=$(ditto "$app" "$destination" 2>&1) || fail replace "$observed"
 printf 'ok replace\n'
