@@ -61,6 +61,8 @@ Preconditions:
   with "A" and `16 × 8 px`, and `v2_rle_overflow` shows "This file can’t be
   previewed", "The file looks damaged or incomplete." and a collapsed "Details".
   With the app not running, the same command opens only the document windows.
+  The setup window opened next to them only on macOS 14 (#115), so only a
+  macOS 14 Mac or VM proves this check.
 - **File > Open.** Run
   `osascript -e 'tell application "System Events" to tell process "BrushesQuickLook"' -e 'set frontmost to true' -e 'click menu item "Open…" of menu 1 of menu bar item "File" of menu bar 1' -e 'end tell'`,
   then type the path in the panel with Command-Shift-G and press Return twice.
