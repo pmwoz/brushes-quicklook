@@ -82,13 +82,14 @@ Preconditions:
   removes the items again each time SwiftUI rebuilds the menu. A file under
   Open Recent opens again.
 - **Title.** With `ordered_set.brushset` open, run
-  `osascript -e 'tell application "System Events" to tell process "BrushesQuickLook"' -e 'set frontmost to true' -e 'set {x, y} to position of static text 1 of window "ordered_set.brushset"' -e 'set {w, h} to size of static text 1 of window "ordered_set.brushset"' -e 'click at {x + w div 2, y + h div 2}' -e 'delay 1' -e 'return description of every UI element of window "ordered_set.brushset"' -e 'end tell'`.
-  The list holds the window buttons, `image` and `text` and no
-  `document actions`, and a `screencapture -x` right after shows no popover
-  under the title. A build whose document class autosaves in place shows
-  `document actions`, and the click opens a popover with Name, Tags, Where and
-  a lock checkbox. The popover is not a child of the window in System Events,
-  so `pop overs of window` reads 0 either way.
+  `osascript -e 'tell application "System Events" to tell process "BrushesQuickLook"' -e 'set frontmost to true' -e 'perform action "AXRaise" of window "ordered_set.brushset"' -e 'set {x, y} to position of static text 1 of window "ordered_set.brushset"' -e 'set {w, h} to size of static text 1 of window "ordered_set.brushset"' -e 'click at {x + w div 2, y + h div 2}' -e 'delay 1' -e 'return description of every UI element of window "ordered_set.brushset"' -e 'end tell'`.
+  `AXRaise` brings that window in front of the other document windows, so the
+  click lands on its title. The list holds the window buttons, `image` and
+  `text` and no `document actions`, and a `screencapture -x` right after shows
+  no popover under the title. A build whose document class autosaves in place
+  shows `document actions`, and the click opens a popover with Name, Tags,
+  Where and a lock checkbox. The popover is not a child of the window in
+  System Events, so `pop overs of window` reads 0 either way.
 - **Too large.** Run `mkfile -n 600m build.noindex/verify/fixtures/too_large.abr`,
   note `ps -o rss= -p $(pgrep -x BrushesQuickLook)`, then run
   `open -a "$A" build.noindex/verify/fixtures/too_large.abr`. The window shows
