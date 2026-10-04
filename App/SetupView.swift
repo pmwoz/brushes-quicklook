@@ -2,10 +2,17 @@ import AppKit
 import SwiftUI
 
 struct SetupView: View {
-    /// Opens the Quick Look sheet of System Settings > General > Login Items & Extensions.
+    /// Opens the Quick Look sheet of General > Login Items & Extensions, or on macOS 14 the
+    /// Privacy & Security > Extensions list.
     static let extensionSettings = URL(
         string: "x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.quicklook.preview"
     )!
+
+    private static let extensionSettingsPath = if #available(macOS 15, *) {
+        "General > Login Items & Extensions > Quick Look"
+    } else {
+        "Privacy & Security > Extensions > Quick Look"
+    }
 
     @Environment(\.openURL) private var openURL
     @Environment(\.openDocument) private var openDocument
@@ -24,7 +31,7 @@ struct SetupView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .lineSpacing(2)
-            Text("To finish setup, turn on BrushesPreview and BrushesThumbnail in System Settings > General > Login Items & Extensions > Quick Look.")
+            Text("To finish setup, turn on BrushesPreview and BrushesThumbnail in System Settings > \(Self.extensionSettingsPath).")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .lineSpacing(2)

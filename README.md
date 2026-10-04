@@ -123,7 +123,8 @@ xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesPreviewTests -deri
 There is no release yet. Issue #6 tracks the signed and notarized DMG. Until
 then, build and install from source with `scripts/install.sh`, described under
 Building. If Finder still shows generic icons, enable the extensions under
-System Settings > General > Login Items & Extensions > Quick Look.
+System Settings > General > Login Items & Extensions > Quick Look. On macOS 14
+they are under System Settings > Privacy & Security > Extensions > Quick Look.
 
 ## Decisions
 
