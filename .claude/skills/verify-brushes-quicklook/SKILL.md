@@ -104,9 +104,12 @@ Run `bql doctor` first and whenever a result looks wrong. It changes nothing and
   checkout or a manual copy. The check reads each process's executable path and
   uses `codesign -v`, because the CDHash of a pid is read from disk. The check
   gives the exact `kill <pid>`.
-- `running-app` (warn): a live host app process runs an older binary, so
-  `open` and System Events reach the old code. Same path and `codesign -v`
-  rule as the extensions. The check gives the exact `kill <pid>`.
+- `running-app` (warn): the host app at `/Applications` runs a binary that
+  was replaced on disk, so `open` sends files to the old code. The check uses
+  `codesign -v` like the extension checks and gives the exact `kill <pid>`. A
+  copy that runs from another path, such as a Debug build from Xcode, is
+  ignored, because `open -a` and the quit in `bql install` reach only the copy
+  at `/Applications`.
 
 ## Drive
 

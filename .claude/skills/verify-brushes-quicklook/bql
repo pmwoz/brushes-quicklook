@@ -579,6 +579,9 @@ def cmd_doctor(args):
             path = run(["ps", "-o", "comm=", "-p", pid]).stdout.strip()
             if not path.endswith(f"BrushesQuickLook.app/{executable}"):
                 continue
+            # `open -a` and the quit AppleEvent reach only the copy at APP, so a host app elsewhere does not matter.
+            if kind == "app" and path != str(APP / executable):
+                continue
             # A pid's CDHash is read from disk, so only `codesign -v` sees a file replaced or deleted under it.
             verify = run(["codesign", "-v", pid])
             invalid = verify.returncode != 0 and run(["kill", "-0", pid]).returncode == 0
