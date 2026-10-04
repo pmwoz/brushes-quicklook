@@ -41,7 +41,11 @@ Preconditions:
 - **Window ids.** List the app's windows with
   `osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID))).filter(w => w.kCGWindowOwnerName === "BrushesQuickLook" && w.kCGWindowLayer === 0).map(w => [w.kCGWindowNumber, w.kCGWindowName]))'`.
   The setup window is named "Brushes Quick Look". A document window is named after its file.
-- **Setup window.** Quit the app, then run `open "$A"`. The window list holds only
+- **Setup window.** Quit the app with
+  `osascript -e 'tell application id "pl.esdesign.brushesquicklook" to quit'`,
+  wait until `pgrep -x BrushesQuickLook` finds nothing, then run `open "$A"`.
+  Do not kill the process. After `pkill`, `open "$A"` can bring back the
+  document windows that were open. The window list holds only
   "Brushes Quick Look", 520 × 415 pt (520 × 411 on macOS 14), and no Open panel appears. Run
   `screencapture -x -o -l <id> build.noindex/verify/evidence/host-app.png`. The
   PNG shows every line and both buttons from `app-window`, with the path for
