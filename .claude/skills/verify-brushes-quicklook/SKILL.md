@@ -86,11 +86,15 @@ other than its own.
 Screen Recording and Accessibility, and `vm up` grants it Automation for
 Finder and System Events, so `vm run preview` and `vm run finder` need no
 setup. `BQL_REAL_FILES` is not copied into the guest.
-An Apple Event sent before the grant leaves a consent prompt open in the
-guest for about 2 minutes. When that prompt expires, tccd replaces the grant
-with a deny. If `vm run finder` or a System Events call still times out after
-`vm up`, run `vm down` and `vm up`. Restarting tccd does not clear the prompt.
 Remove a VM you no longer need with `tart delete <name>`.
+
+An Apple Event sent in the guest before `vm up` wrote the grant, for example
+on a VM booted with `tart run`, opens a consent prompt that stays pending for
+about 2 minutes. Until it expires, events to that app hang even with the
+grant. When it expires, tccd replaces the grant with a deny. So `vm run
+finder` or a System Events call can still time out after `vm up`, and `bql`
+exits 2 with a `TimeoutExpired` on `osascript`. Run `vm down` and `vm up`
+with the same `--image`. Restarting tccd or System Events does not help.
 
 The host-app recipes in [`features/host-app.md`](features/host-app.md) run
 in the guest on both images. Run the `bql` ones with `vm run`, and install
