@@ -91,8 +91,15 @@ for bundle in "$app" \
     declared=
     i=0
     while [ "$i" -lt "$count" ]; do
-        category=$(plutil -extract "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPIType" raw -expect string -o - "$manifest" 2>&1) \
+        category=$(plutil -extract "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPIType" raw -expect string -n -o - "$manifest" 2>&1 && printf .) \
             || fail privacy "$category"
+        category=${category%.}
+        case $category in
+            NSPrivacyAccessedAPICategoryFileTimestamp | NSPrivacyAccessedAPICategorySystemBootTime | \
+                NSPrivacyAccessedAPICategoryDiskSpace | NSPrivacyAccessedAPICategoryActiveKeyboards | \
+                NSPrivacyAccessedAPICategoryUserDefaults) ;;
+            *) fail privacy "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPIType is not a known category: \"$category\"" ;;
+        esac
         observed=$(plutil -extract "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPITypeReasons.0" raw -o - "$manifest" 2>&1) \
             || fail privacy "$category has no reason: $observed"
         declared="$declared ${category#NSPrivacyAccessedAPICategory}"
