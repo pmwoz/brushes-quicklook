@@ -616,8 +616,8 @@ def cmd_install(args):
     if proc.returncode != 0:
         fixes = {
             "build": "Run the xcodebuild command from README.md to see the full compiler output.",
-            "check-build": "The Release product failed a lipo, hardened runtime, sandbox or UTType check. "
-                           "Run scripts/check-build.sh on it.",
+            "check-build": "The Release product failed a check in scripts/check-build.sh. "
+                           "The FAIL line in `error` names the check.",
             "quit": "BrushesQuickLook did not quit, because a sheet or panel is open or another instance runs. Close "
                     "the sheet or `kill` the pids in the error, then rerun `bql install`.",
             "replace": "Check that /Applications is writable and the app is not open from a mounted image.",
