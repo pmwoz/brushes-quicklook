@@ -42,7 +42,7 @@ Preconditions:
   `osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID))).filter(w => w.kCGWindowOwnerName === "BrushesQuickLook" && w.kCGWindowLayer === 0).map(w => [w.kCGWindowNumber, w.kCGWindowName]))'`.
   The setup window is named "Brushes Quick Look". A document window is named after its file.
 - **Setup window.** Quit the app, then run `open "$A"`. The window list holds only
-  "Brushes Quick Look", 520 × 415 pt, and no Open panel appears. Run
+  "Brushes Quick Look", 520 × 415 pt (520 × 411 on macOS 14), and no Open panel appears. Run
   `screencapture -x -o -l <id> build.noindex/verify/evidence/host-app.png`. The
   PNG shows every line and both buttons from `app-window`.
   The Open panel appeared only on macOS 14 (#114), so only a macOS 14 Mac or
@@ -54,7 +54,9 @@ Preconditions:
   BrushesPreview and BrushesThumbnail under BrushesQuickLook. This works whether
   or not System Settings was already open. Capture it by the window ids of
   `pgrep -x "System Settings"` from the same CoreGraphics list, filtered by
-  `kCGWindowOwnerPID`. The sheet is the id with an empty name.
+  `kCGWindowOwnerPID`. The sheet is the id with an empty name. On macOS 14 the
+  button opens the Privacy & Security > Extensions list instead, with
+  "BrushesPreview, BrushesThumbnail" under Quick Look (#143).
 - **Open a file.** Run `open -a "$A" $F/zero_area_tip.abr $F/ordered_set.brushset $F/root_brush.brush $F/v2_rle_overflow.abr`.
   Four 760 × 600 windows open, named after the files. `zero_area_tip` reads
   `2 brushes · 1 without preview`, `ordered_set` shows "Ordered" with
@@ -68,7 +70,8 @@ Preconditions:
   `osascript -e 'tell application "System Events" to tell process "BrushesQuickLook"' -e 'set frontmost to true' -e 'click menu item "Open…" of menu 1 of menu bar item "File" of menu bar 1' -e 'end tell'`,
   then type the path in the panel with Command-Shift-G and press Return twice.
   A window named after the file opens. `click button 2 of group 1 of window "Brushes Quick Look"`
-  ("Open Brush File…") opens the same panel.
+  ("Open Brush File…") opens the same panel. In a macOS 14 VM, wait 2 s
+  between the panel keystrokes. With 1 s the panel stayed open.
 - **File menu.** Right after launch, and again with `ordered_set.brushset` open, list the menu with
   `osascript -l JavaScript -e 'const p = Application("System Events").processes.byName("BrushesQuickLook"); p.frontmost = true; delay(0.5); JSON.stringify(p.menuBars[0].menuBarItems.byName("File").menus[0].menuItems().map(i => i.title()))'`.
   It reads `Open…, Open Recent, "", Close, Close All, "", Share`. Command-S
