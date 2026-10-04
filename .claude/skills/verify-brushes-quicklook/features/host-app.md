@@ -32,7 +32,7 @@ Preconditions:
 - File > Open and the button clicks use System Events, which needs Accessibility for the terminal.
 
 - **Install and open.** Run `bql install`. The JSON lists the steps
-  `build, check-build, unregister N stale paths, replace, register, verify` and
+  `build, check-build, unregister N stale paths, quit, replace, register, verify` and
   the setup window opens.
 - **Registration.** Run `bql doctor`. `pluginkit-preview` and
   `pluginkit-thumbnail` are `ok` with one `+` line each, ending in the

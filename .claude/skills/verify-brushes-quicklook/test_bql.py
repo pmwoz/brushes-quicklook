@@ -196,10 +196,15 @@ class ExitContractTest(unittest.TestCase):
         self.addCleanup(env.stop)
         os.environ.pop("GITHUB_STEP_SUMMARY", None)
 
-    def doctor(self, installed=True, built=True, mismatched=None, unregistered=None, other_copy=False, previews=None):
-        """previews maps a BrushesPreview pid to (root, codesign -v error or None, alive).
+    def doctor(self, installed=True, built=True, mismatched=None, unregistered=None, other_copy=False, previews=None,
+               apps=None):
+        """previews and apps map a BrushesPreview or BrushesQuickLook pid to (root, codesign -v error or None, alive).
         root is "app", "build", "other" or None for a process that exited."""
-        previews = previews or {}
+        executables = {"BrushesPreview": "Contents/PlugIns/BrushesPreview.appex/Contents/MacOS/BrushesPreview",
+                       "BrushesQuickLook": "Contents/MacOS/BrushesQuickLook"}
+        processes = {"BrushesPreview": previews or {}, "BrushesQuickLook": apps or {}}
+        owner = {pid: name for name, pids in processes.items() for pid in pids}
+        states = {pid: state for pids in processes.values() for pid, state in pids.items()}
         base = Path(tempfile.mkdtemp(dir=self.dir))
         app, build = base / "installed/BrushesQuickLook.app", base / "build/BrushesQuickLook.app"
         for bundle, exists in ((app, installed), (build, built)):
@@ -220,16 +225,15 @@ class ExitContractTest(unittest.TestCase):
             if args[0] == "git":
                 return SimpleNamespace(stdout="project.yml\n")
             if args[0] == "pgrep":
-                return SimpleNamespace(stdout="\n".join(previews) if args[-1] == bql.PLUGINS["preview"] else "")
+                return SimpleNamespace(stdout="\n".join(processes.get(args[-1], {})))
             if args[0] == "ps":
-                root = {"app": app, "build": build, "other": base / "Other.app"}.get(previews[args[-1]][0])
-                executable = "Contents/PlugIns/BrushesPreview.appex/Contents/MacOS/BrushesPreview"
-                return SimpleNamespace(stdout=f"{root}/{executable}\n" if root else "")
+                root = {"app": app, "build": build, "other": base / "Other.app"}.get(states[args[-1]][0])
+                return SimpleNamespace(stdout=f"{root}/{executables[owner[args[-1]]]}\n" if root else "")
             if args[0] == "codesign":
-                error = previews[args[-1]][1]
+                error = states[args[-1]][1]
                 return SimpleNamespace(returncode=1 if error else 0, stderr=f"{error}\n" if error else "")
             if args[0] == "kill":
-                return SimpleNamespace(returncode=0 if previews[args[-1]][2] else 1)
+                return SimpleNamespace(returncode=0 if states[args[-1]][2] else 1)
             if args[0] == bql.LSREGISTER:
                 copies = [app, base / "Other/BrushesQuickLook.app"] if other_copy else [app]
                 return SimpleNamespace(stdout="".join(f"    path:    {copy} (0x1)\n" for copy in copies))
@@ -325,6 +329,16 @@ class ExitContractTest(unittest.TestCase):
                    for c in result["checks"] if c["check"] == "running-preview"}
         self.assertEqual((code, running), (0, {101: ("ok", None), 102: ("warn", replaced), 103: ("warn", None),
                                                106: ("ok", None)}))
+
+    def test_doctor_warns_on_a_live_host_app_process_not_running_the_installed_code(self):
+        replaced = "202: the code on disk does not match what is running"
+        apps = {"201": ("app", None, True), "202": ("app", replaced, True), "203": ("build", None, True)}
+        code, result = run_bql("doctor", **self.doctor(apps=apps))
+        running = {c["detail"]["pid"]: (c["status"], c.get("fix")) for c in result["checks"]
+                   if c["check"] == "running-app"}
+        self.assertEqual((code, {pid: status for pid, (status, _) in running.items()}),
+                         (0, {201: "ok", 202: "warn", 203: "warn"}))
+        self.assertIn("kill 202", running[202][1])
 
     def test_a_missing_file_exits_2_with_error_and_fix(self):
         code, result = run_bql("thumb", self.dir / "missing.abr")
