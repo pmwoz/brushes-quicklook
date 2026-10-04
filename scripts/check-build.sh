@@ -87,16 +87,17 @@ for bundle in "$app" \
 
     manifest="$bundle/Contents/Resources/PrivacyInfo.xcprivacy"
     observed=$(plutil -lint "$manifest" 2>&1) || fail privacy "$observed"
+    count=$(plutil -extract NSPrivacyAccessedAPITypes raw -expect array -o - "$manifest" 2>&1) || fail privacy "$count"
     declared=
     i=0
-    while category=$(plutil -extract "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPIType" raw -o - "$manifest" 2>/dev/null); do
+    while [ "$i" -lt "$count" ]; do
+        category=$(plutil -extract "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPIType" raw -expect string -o - "$manifest" 2>&1) \
+            || fail privacy "$category"
         observed=$(plutil -extract "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPITypeReasons.0" raw -o - "$manifest" 2>&1) \
             || fail privacy "$category has no reason: $observed"
         declared="$declared ${category#NSPrivacyAccessedAPICategory}"
         i=$((i + 1))
     done
-    plutil -extract "NSPrivacyAccessedAPITypes.$i" raw -o - "$manifest" >/dev/null 2>&1 \
-        && fail privacy "NSPrivacyAccessedAPITypes.$i has no NSPrivacyAccessedAPIType"
     symbols=$(nm -u -j -arch all "$binary" 2>&1) || fail privacy "$symbols"
     selectors=$(otool -arch all -v -s __TEXT __objc_methname "$binary" 2>&1) || fail privacy "$selectors"
     observed=$(printf '%s\n%s\n' "$symbols" "$selectors" \
