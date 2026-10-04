@@ -66,7 +66,25 @@ struct BrushesQuickLookApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
-        readDocumentsOnMainThread()
+        let controller = NSDocumentController.shared
+        let brushType = BrushDocument.readableContentTypes[0].identifier
+        guard let documentClass = controller.documentClass(forType: brushType),
+              let documentMetaclass = object_getClass(documentClass)
+        else {
+            return assertionFailure("SwiftUI's document class not found, so documents read in parallel and titles offer rename")
+        }
+        // SwiftUI's document class lets NSDocumentController read documents on parallel threads. On macOS 14
+        // those threads race on AppKit's document opening session and can crash the app. A brush document
+        // reads nothing, so the class is made to read on the main thread instead.
+        let never: @convention(block) (AnyObject, NSString?) -> ObjCBool = { _, _ in false }
+        replaceMethod(#selector(NSDocument.canConcurrentlyReadDocuments(ofType:)), of: documentMetaclass, with: never)
+        // A window title offers rename, move, tags and lock in a popover when its document class autosaves in place.
+        // Sharing and the File menu's Share item also follow autosave in place, so they are turned back on.
+        let no: @convention(block) (AnyObject) -> ObjCBool = { _ in false }
+        let yes: @convention(block) (AnyObject) -> ObjCBool = { _ in true }
+        replaceMethod(#selector(getter: NSDocument.allowsDocumentSharing), of: documentClass, with: yes)
+        replaceMethod(#selector(getter: NSDocumentController.allowsAutomaticShareMenu), of: type(of: controller), with: yes)
+        replaceMethod(#selector(getter: NSDocument.autosavesInPlace), of: documentMetaclass, with: no)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -78,17 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.windows.first { $0.identifier?.rawValue == BrushesQuickLookApp.setupWindowID }?.close()
     }
 
-    /// SwiftUI's document class lets NSDocumentController read documents on parallel threads. On macOS 14
-    /// those threads race on AppKit's document opening session and can crash the app. A brush document
-    /// reads nothing, so the class is made to read on the main thread instead.
-    private func readDocumentsOnMainThread() {
-        let selector = #selector(NSDocument.canConcurrentlyReadDocuments(ofType:))
-        let type = BrushDocument.readableContentTypes[0].identifier
-        guard let documentClass = NSDocumentController.shared.documentClass(forType: type),
-              let metaclass = object_getClass(documentClass),
-              let method = class_getClassMethod(documentClass, selector)
-        else { return assertionFailure("SwiftUI's document class not found, so documents still read in parallel") }
-        let never: @convention(block) (AnyObject, NSString?) -> ObjCBool = { _, _ in false }
-        class_replaceMethod(metaclass, selector, imp_implementationWithBlock(never), method_getTypeEncoding(method))
+    private func replaceMethod(_ selector: Selector, of cls: AnyClass, with block: Any) {
+        guard let method = class_getInstanceMethod(cls, selector)
+        else { return assertionFailure("\(cls) has no \(selector)") }
+        class_replaceMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
     }
 }
