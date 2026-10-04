@@ -88,6 +88,23 @@ Finder and System Events, so `vm run preview` and `vm run finder` need no
 setup. `BQL_REAL_FILES` is not copied into the guest.
 Remove a VM you no longer need with `tart delete <name>`.
 
+The host-app recipes in [`features/host-app.md`](features/host-app.md) run
+in the guest on both images. Run the `bql` ones with `vm run`, and install
+with `vm run install --no-build`. Its step list starts at `check-build`.
+Every other recipe is a shell command. After `vm run fixtures`, pass it on
+stdin, with `<vm>` taken from the `vm` field of `vm up`:
+
+```
+tart exec -i <vm> sh -s <<'EOF'
+cd /Users/admin/brushes-quicklook
+A=/Applications/BrushesQuickLook.app F=build.noindex/verify/fixtures/corpus
+<recipe>
+EOF
+```
+
+`vm up` granted the guest agent Automation, so the System Events calls in
+these recipes need no prompt.
+
 ## Doctor
 
 Run `bql doctor` first and whenever a result looks wrong. It changes nothing and checks:
