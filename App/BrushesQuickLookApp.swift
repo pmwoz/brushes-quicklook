@@ -34,13 +34,6 @@ struct BrushesQuickLookApp: App {
         for menu in NSApp.mainMenu?.items.compactMap(\.submenu) ?? [] {
             for item in menu.items {
                 guard let action = item.action, unsupportedActions.contains(action) else { continue }
-                let next = menu.index(of: item) + 1
-                // AppKit puts the "Revert To" submenu right after this item. The submenu is empty until it
-                // opens and shares its delegate class with Open Recent and Share, so position is its only identifier.
-                if action == #selector(NSDocument.revertToSaved(_:)), next < menu.numberOfItems,
-                   menu.item(at: next)?.hasSubmenu == true {
-                    menu.removeItem(at: next)
-                }
                 menu.removeItem(item)
             }
         }
@@ -78,7 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // reads nothing, so the class is made to read on the main thread instead.
         let never: @convention(block) (AnyObject, NSString?) -> ObjCBool = { _, _ in false }
         replaceMethod(#selector(NSDocument.canConcurrentlyReadDocuments(ofType:)), of: documentMetaclass, with: never)
-        // A window title offers rename, move, tags and lock in a popover when its document class autosaves in place.
+        // A window title offers rename, move, tags and lock in a popover, and the File menu gains a Revert To
+        // submenu, when its document class autosaves in place.
         // Sharing and the File menu's Share item also follow autosave in place, so they are turned back on.
         let no: @convention(block) (AnyObject) -> ObjCBool = { _ in false }
         let yes: @convention(block) (AnyObject) -> ObjCBool = { _ in true }
