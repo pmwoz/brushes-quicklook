@@ -88,6 +88,17 @@ Finder and System Events, so `vm run preview` and `vm run finder` need no
 setup. `BQL_REAL_FILES` is not copied into the guest.
 Remove a VM you no longer need with `tart delete <name>`.
 
+The host-app recipes in [`features/host-app.md`](features/host-app.md) run
+in the guest on both images. Install, registration and types use `bql`, so
+run them with `vm run`. Run window ids, setup window, settings button, open a
+file, File > Open, File menu, title and too large with
+`tart exec <vm> sh -c '<recipe>'`. Set `A` in that script and use the guest
+fixtures under `/Users/admin/brushes-quicklook/build.noindex/verify/fixtures`
+from `vm run fixtures`. The recipes run as the guest agent, so their System
+Events calls need no prompt. In the sonoma guest, wait 2 s between the Open
+panel keystrokes. There the settings button opens Privacy & Security >
+Extensions, not the Quick Look sheet, see #143.
+
 ## Doctor
 
 Run `bql doctor` first and whenever a result looks wrong. It changes nothing and checks:
