@@ -57,7 +57,7 @@ The guest needs no Xcode.
 
 ```
 vm setup [--image tahoe|sonoma]   # clone the cirruslabs base image into this checkout's VM, once
-vm up                             # boot it headless, wait for the guest agent, grant it Automation for Finder
+vm up                             # boot it headless, wait for the guest agent, grant it Automation for Finder and System Events
 vm sync                           # build Release on the host, unregister that build on the host, copy the checkout and the build into the guest
 vm run install --no-build         # bql install in the guest, with the host's build
 vm run doctor                     # any bql subcommand: vm run <bql args>

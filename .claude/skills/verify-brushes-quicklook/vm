@@ -59,15 +59,15 @@ git add -A
 
 # `bql finder` sends Apple Events to Finder and System Events. Under `tart exec` TCC attributes them to the guest agent,
 # which the image grants no Automation, so each osascript waits on a consent prompt nobody can answer. The cirruslabs
-# images run with SIP disabled, so the agent can write its own grant. The agent's path carries its version.
+# images run with SIP disabled, so the agent can write its own grant. launchd starts the agent by its absolute path,
+# which `ps -o comm=` prints, and the resolved path carries the agent's version. tccd holds the database open.
 GUEST_AUTOMATION = """
 set -eu
 agent=$(realpath "$(ps -o comm= -p $PPID)")
-for target in com.apple.finder com.apple.systemevents; do
-    sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access (service, client,
-        client_type, auth_value, auth_reason, auth_version, indirect_object_identifier_type, indirect_object_identifier)
-        VALUES ('kTCCServiceAppleEvents', '$agent', 1, 2, 0, 1, 0, '$target')"
-done
+sqlite3 -cmd ".timeout 10000" "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access
+    (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier_type,
+    indirect_object_identifier) VALUES ('kTCCServiceAppleEvents', '$agent', 1, 2, 0, 1, 0, 'com.apple.finder'),
+    ('kTCCServiceAppleEvents', '$agent', 1, 2, 0, 1, 0, 'com.apple.systemevents')"
 """
 
 HOST_BUILD = [["scripts/build.sh"], ["scripts/check-build.sh", str(BUILD)]]
@@ -139,19 +139,24 @@ def cmd_up(args):
                   "error": f"tart run exited {tart.returncode}: {output}",
                   "fix": LIMIT_FIX.format(image=args.image) if LIMIT_ERROR in output else f"Read {log}."}, 1)
         if guest_ready(name):
-            grant = run(["tart", "exec", name, "sh", "-c", GUEST_AUTOMATION], timeout=30)
-            if grant.returncode != 0:
-                raise Fail(f"Granting the guest agent Automation for Finder failed: "
-                           f"{grant.stderr.strip() or grant.stdout.strip()}",
-                           f"Rerun `vm up --image {args.image}`. Without the grant `vm run finder` waits 60 s on a "
-                           "consent prompt.")
-            emit({"ok": True, "vm": name, "already_running": already_running,
-                  "boot_seconds": round(time.time() - started, 1), "next": f"Run `vm sync --image {args.image}`."})
+            break
         time.sleep(0.5)
-    emit({"ok": False, "vm": name, "log": str(log),
-          "error": f"The guest agent did not answer `tart exec` within {BOOT_TIMEOUT} s: "
-                   f"{log.read_text().strip()[-2000:]}",
-          "fix": f"Read {log}, run `vm down --image {args.image}` and `vm up --image {args.image}` again."}, 1)
+    else:
+        emit({"ok": False, "vm": name, "log": str(log),
+              "error": f"The guest agent did not answer `tart exec` within {BOOT_TIMEOUT} s: "
+                       f"{log.read_text().strip()[-2000:]}",
+              "fix": f"Read {log}, run `vm down --image {args.image}` and `vm up --image {args.image}` again."}, 1)
+    boot_seconds = round(time.time() - started, 1)
+    grant = run(["tart", "exec", name, "sh", "-c", GUEST_AUTOMATION], timeout=60)
+    if grant.returncode != 0:
+        emit({"ok": False, "vm": name, "boot_seconds": boot_seconds,
+              "error": "Granting the guest agent Automation for Finder and System Events failed: "
+                       f"{grant.stderr.strip() or grant.stdout.strip()}",
+              "fix": "The VM is running and every command except `vm run finder` works. `vm run finder` would wait "
+                     "60 s on a consent prompt. The grant needs `sqlite3` in the guest, SIP disabled and the TCC "
+                     "`access` table that GUEST_AUTOMATION writes."}, 1)
+    emit({"ok": True, "vm": name, "already_running": already_running, "boot_seconds": boot_seconds,
+          "next": f"Run `vm sync --image {args.image}`."})
 
 
 def cmd_sync(args):
@@ -242,8 +247,8 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     for name, help_text in [
         ("setup", "clone the image into this checkout's VM unless it exists"),
-        ("up", "boot the VM headless, wait for its guest agent and grant it Automation for Finder, fail fast when "
-               "Tart cannot start it"),
+        ("up", "boot the VM headless, wait for its guest agent, grant it Automation for Finder and System Events, "
+               "fail fast when Tart cannot start it"),
         ("sync", "build Release on the host and copy the checkout and the build into the guest"),
         ("run", "run bql in the guest with the arguments that follow, passing its output and exit code through"),
         ("evidence", "copy the guest's bql evidence to build.noindex/verify/vm/<vm>/evidence on the host"),

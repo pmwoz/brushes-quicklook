@@ -112,25 +112,41 @@ class GuestSyncTest(unittest.TestCase):
         self.assertFalse((self.root / "guest/brushes-quicklook.new").exists())
 
 
+# The `access` table of the user TCC.db in the macos-tahoe-base and macos-sonoma-base guests.
+TCC_ACCESS = """CREATE TABLE access (    service        TEXT        NOT NULL,     client         TEXT        NOT NULL,
+    client_type    INTEGER     NOT NULL,     auth_value     INTEGER     NOT NULL,     auth_reason    INTEGER     NOT NULL,
+    auth_version   INTEGER     NOT NULL,     csreq          BLOB,     policy_id      INTEGER,
+    indirect_object_identifier_type    INTEGER,     indirect_object_identifier         TEXT NOT NULL DEFAULT 'UNUSED',
+    indirect_object_code_identity      BLOB,     flags          INTEGER,
+    last_modified  INTEGER     NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER)),     pid            INTEGER,
+    pid_version    INTEGER,     boot_uuid      TEXT NOT NULL DEFAULT 'UNUSED',
+    last_reminded  INTEGER     NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER)),
+    PRIMARY KEY (service, client, client_type, indirect_object_identifier),
+    FOREIGN KEY (policy_id) REFERENCES policies(id) ON DELETE CASCADE ON UPDATE CASCADE)"""
+
+
 class GuestAutomationTest(unittest.TestCase):
     """Runs the guest half of `vm up` on this Mac against a temporary TCC database."""
 
-    def test_its_parent_process_gets_automation_for_finder_and_system_events_once(self):
+    def test_its_parent_gets_automation_for_finder_and_system_events_once_while_tccd_holds_a_lock(self):
         with tempfile.TemporaryDirectory() as home:
             db = Path(home, "Library/Application Support/com.apple.TCC/TCC.db")
             db.parent.mkdir(parents=True)
-            with sqlite3.connect(db) as tcc:
-                tcc.execute("CREATE TABLE access (service TEXT NOT NULL, client TEXT NOT NULL, client_type INTEGER NOT "
-                            "NULL, auth_value INTEGER NOT NULL, auth_reason INTEGER NOT NULL, auth_version INTEGER NOT "
-                            "NULL, indirect_object_identifier_type INTEGER, indirect_object_identifier TEXT NOT NULL "
-                            "DEFAULT 'UNUSED', PRIMARY KEY (service, client, client_type, indirect_object_identifier))")
-            for _ in range(2):
+            tccd = sqlite3.connect(db, isolation_level=None)
+            self.addCleanup(tccd.close)
+            tccd.execute(TCC_ACCESS)
+            for attempt in range(2):
+                if attempt == 0:
+                    tccd.execute("BEGIN EXCLUSIVE")
                 # zsh stands in for the guest agent. The trailing command keeps zsh from exec'ing sh in its place.
-                subprocess.run(["/bin/zsh", "-c", 'sh -c "$1"; exit $?', "zsh", vm.GUEST_AUTOMATION],
-                               env={**os.environ, "HOME": home}, check=True, capture_output=True)
-            with sqlite3.connect(db) as tcc:
-                rows = tcc.execute("SELECT service, client, client_type, auth_value, indirect_object_identifier "
-                                   "FROM access ORDER BY indirect_object_identifier").fetchall()
+                grant = subprocess.Popen(["/bin/zsh", "-c", 'sh -c "$1"; exit $?', "zsh", vm.GUEST_AUTOMATION],
+                                         env={**os.environ, "HOME": home}, stderr=subprocess.PIPE, text=True)
+                if attempt == 0:
+                    time.sleep(1)
+                    tccd.execute("COMMIT")
+                self.assertEqual(grant.wait(timeout=30), 0, grant.stderr.read())
+            rows = tccd.execute("SELECT service, client, client_type, auth_value, indirect_object_identifier "
+                                "FROM access ORDER BY indirect_object_identifier").fetchall()
         self.assertEqual(rows, [("kTCCServiceAppleEvents", "/bin/zsh", 1, 2, "com.apple.finder"),
                                 ("kTCCServiceAppleEvents", "/bin/zsh", 1, 2, "com.apple.systemevents")])
 
