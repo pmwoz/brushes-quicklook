@@ -10,7 +10,7 @@ macOS registers the extensions when the app is opened for the first time.
 ## Sub-features
 
 - `app-window` shows the app icon, "Brushes Quick Look", one line on what the app does, one line on turning on BrushesPreview and BrushesThumbnail with the System Settings path, the buttons "Open System Settings" and "Open Brush File…", and a line about dropping files on the window.
-- `app-settings` means "Open System Settings" opens the Quick Look sheet of General > Login Items & Extensions, which lists BrushesPreview and BrushesThumbnail under BrushesQuickLook.
+- `app-settings` means "Open System Settings" opens the Quick Look sheet of General > Login Items & Extensions, which lists BrushesPreview and BrushesThumbnail under BrushesQuickLook. On macOS 14 it opens the Privacy & Security > Extensions list, whose Quick Look row reads "BrushesPreview, BrushesThumbnail", and the setup window names that path.
 - `app-open` means a brush file opened in the app shows a 760 × 600 window titled with the file name and the preview's content: the grid, the single-brush layout or "This file can’t be previewed".
 - `app-open-ways` covers the entry points: File > Open, "Open Brush File…", a drop on the setup window, and Open With in Finder, which `open -a` stands in for. The app is an Alternate handler: it ranks below any app that claims these types and opens them on double-click only when no other app does.
 - `app-file-menu` means the File menu has Open, Open Recent, Close, Close All and Share and no New, Save, Save As, Duplicate, Rename, Move To or Revert To, with or without a brush file open.
@@ -21,7 +21,7 @@ macOS registers the extensions when the app is opened for the first time.
 ## How to get to it (user POV)
 
 - Move the app to Applications and open it. The setup window opens.
-- Click "Open System Settings", or go to System Settings > General > Login Items & Extensions > Quick Look.
+- Click "Open System Settings", or go to System Settings > General > Login Items & Extensions > Quick Look. On macOS 14 go to System Settings > Privacy & Security > Extensions > Quick Look.
 - Choose File > Open or "Open Brush File…", drop brush files on the setup window, or use Open With > BrushesQuickLook in Finder.
 
 ## Driving it with bql
