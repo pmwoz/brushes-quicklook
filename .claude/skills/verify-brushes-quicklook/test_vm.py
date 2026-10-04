@@ -114,8 +114,9 @@ class GuestSyncTest(unittest.TestCase):
 
 # The `access` table of the user TCC.db in the macos-tahoe-base and macos-sonoma-base guests.
 TCC_ACCESS = """CREATE TABLE access (    service        TEXT        NOT NULL,     client         TEXT        NOT NULL,
-    client_type    INTEGER     NOT NULL,     auth_value     INTEGER     NOT NULL,     auth_reason    INTEGER     NOT NULL,
-    auth_version   INTEGER     NOT NULL,     csreq          BLOB,     policy_id      INTEGER,
+    client_type    INTEGER     NOT NULL,     auth_value     INTEGER     NOT NULL,
+    auth_reason    INTEGER     NOT NULL,     auth_version   INTEGER     NOT NULL,     csreq          BLOB,
+    policy_id      INTEGER,
     indirect_object_identifier_type    INTEGER,     indirect_object_identifier         TEXT NOT NULL DEFAULT 'UNUSED',
     indirect_object_code_identity      BLOB,     flags          INTEGER,
     last_modified  INTEGER     NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER)),     pid            INTEGER,
