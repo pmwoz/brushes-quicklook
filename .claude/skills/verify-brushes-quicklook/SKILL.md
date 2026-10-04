@@ -57,7 +57,7 @@ The guest needs no Xcode.
 
 ```
 vm setup [--image tahoe|sonoma]   # clone the cirruslabs base image into this checkout's VM, once
-vm up                             # boot it headless and wait for the guest agent
+vm up                             # boot it headless, wait for the guest agent, grant it Automation for Finder
 vm sync                           # build Release on the host, unregister that build on the host, copy the checkout and the build into the guest
 vm run install --no-build         # bql install in the guest, with the host's build
 vm run doctor                     # any bql subcommand: vm run <bql args>
@@ -83,8 +83,9 @@ error and the running VMs. Stop only VMs you started. `vm` never touches a VM
 other than its own.
 
 `bql` runs in the guest's logged-in session. The guest agent already has
-Screen Recording, so `vm run preview` needs no setup. `vm run finder` times
-out in the guest, see #124. `BQL_REAL_FILES` is not copied into the guest.
+Screen Recording and Accessibility, and `vm up` grants it Automation for
+Finder and System Events, so `vm run preview` and `vm run finder` need no
+setup. `BQL_REAL_FILES` is not copied into the guest.
 Remove a VM you no longer need with `tart delete <name>`.
 
 ## Doctor

@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -109,6 +110,29 @@ class GuestSyncTest(unittest.TestCase):
         self.sync()
         self.assertTrue((self.repo / "build.noindex/verify/evidence/run").is_dir())
         self.assertFalse((self.root / "guest/brushes-quicklook.new").exists())
+
+
+class GuestAutomationTest(unittest.TestCase):
+    """Runs the guest half of `vm up` on this Mac against a temporary TCC database."""
+
+    def test_its_parent_process_gets_automation_for_finder_and_system_events_once(self):
+        with tempfile.TemporaryDirectory() as home:
+            db = Path(home, "Library/Application Support/com.apple.TCC/TCC.db")
+            db.parent.mkdir(parents=True)
+            with sqlite3.connect(db) as tcc:
+                tcc.execute("CREATE TABLE access (service TEXT NOT NULL, client TEXT NOT NULL, client_type INTEGER NOT "
+                            "NULL, auth_value INTEGER NOT NULL, auth_reason INTEGER NOT NULL, auth_version INTEGER NOT "
+                            "NULL, indirect_object_identifier_type INTEGER, indirect_object_identifier TEXT NOT NULL "
+                            "DEFAULT 'UNUSED', PRIMARY KEY (service, client, client_type, indirect_object_identifier))")
+            for _ in range(2):
+                # zsh stands in for the guest agent. The trailing command keeps zsh from exec'ing sh in its place.
+                subprocess.run(["/bin/zsh", "-c", 'sh -c "$1"; exit $?', "zsh", vm.GUEST_AUTOMATION],
+                               env={**os.environ, "HOME": home}, check=True, capture_output=True)
+            with sqlite3.connect(db) as tcc:
+                rows = tcc.execute("SELECT service, client, client_type, auth_value, indirect_object_identifier "
+                                   "FROM access ORDER BY indirect_object_identifier").fetchall()
+        self.assertEqual(rows, [("kTCCServiceAppleEvents", "/bin/zsh", 1, 2, "com.apple.finder"),
+                                ("kTCCServiceAppleEvents", "/bin/zsh", 1, 2, "com.apple.systemevents")])
 
 
 if __name__ == "__main__":
