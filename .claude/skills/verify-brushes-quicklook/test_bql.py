@@ -330,14 +330,14 @@ class ExitContractTest(unittest.TestCase):
         self.assertEqual((code, running), (0, {101: ("ok", None), 102: ("warn", replaced), 103: ("warn", None),
                                                106: ("ok", None)}))
 
-    def test_doctor_warns_on_a_live_host_app_process_not_running_the_installed_code(self):
+    def test_doctor_warns_on_the_installed_host_app_running_replaced_code_and_ignores_other_copies(self):
         replaced = "202: the code on disk does not match what is running"
         apps = {"201": ("app", None, True), "202": ("app", replaced, True), "203": ("build", None, True)}
         code, result = run_bql("doctor", **self.doctor(apps=apps))
         running = {c["detail"]["pid"]: (c["status"], c.get("fix")) for c in result["checks"]
                    if c["check"] == "running-app"}
         self.assertEqual((code, {pid: status for pid, (status, _) in running.items()}),
-                         (0, {201: "ok", 202: "warn", 203: "warn"}))
+                         (0, {201: "ok", 202: "warn"}))
         self.assertIn("kill 202", running[202][1])
 
     def test_a_missing_file_exits_2_with_error_and_fix(self):
