@@ -95,6 +95,8 @@ for bundle in "$app" \
         declared="$declared ${category#NSPrivacyAccessedAPICategory}"
         i=$((i + 1))
     done
+    plutil -extract "NSPrivacyAccessedAPITypes.$i" raw -o - "$manifest" >/dev/null 2>&1 \
+        && fail privacy "NSPrivacyAccessedAPITypes.$i has no NSPrivacyAccessedAPIType"
     symbols=$(nm -u -j -arch all "$binary" 2>&1) || fail privacy "$symbols"
     selectors=$(otool -arch all -v -s __TEXT __objc_methname "$binary" 2>&1) || fail privacy "$selectors"
     observed=$(printf '%s\n%s\n' "$symbols" "$selectors" \
