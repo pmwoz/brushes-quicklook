@@ -108,8 +108,10 @@ Run `bql doctor` first and whenever a result looks wrong. It changes nothing and
   was replaced on disk, so `open` sends files to the old code. The check uses
   `codesign -v` like the extension checks and gives the exact `kill <pid>`. A
   copy that runs from another path, such as a Debug build from Xcode, is
-  ignored, because `open -a` and the quit in `bql install` reach only the copy
-  at `/Applications`.
+  ignored, like in `bql install`. With such a copy running,
+  `open -a /Applications/BrushesQuickLook.app <file>` starts the
+  `/Applications` copy and the quit in `bql install` leaves the other copy
+  running. A copy registered at another path is reported by `launchservices`.
 
 ## Drive
 

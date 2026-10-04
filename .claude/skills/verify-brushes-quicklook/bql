@@ -579,13 +579,14 @@ def cmd_doctor(args):
             path = run(["ps", "-o", "comm=", "-p", pid]).stdout.strip()
             if not path.endswith(f"BrushesQuickLook.app/{executable}"):
                 continue
-            # `open -a` and the quit AppleEvent reach only the copy at APP, so a host app elsewhere does not matter.
-            if kind == "app" and path != str(APP / executable):
+            elsewhere = path != str(APP / executable)
+            # Like app_pids in scripts/install.sh: `open -a APP` starts the copy at APP rather than using one elsewhere.
+            if elsewhere and kind == "app":
                 continue
             # A pid's CDHash is read from disk, so only `codesign -v` sees a file replaced or deleted under it.
             verify = run(["codesign", "-v", pid])
             invalid = verify.returncode != 0 and run(["kill", "-0", pid]).returncode == 0
-            stale = path != str(APP / executable) or invalid
+            stale = elsewhere or invalid
             restart = (f"`open` sends files to it. Run `kill {pid}`, then `open {APP}`." if kind == "app" else
                        f"It keeps serving requests. Run `kill {pid}`; Quick Look starts a fresh one on the next request.")
             check(f"running-{kind}", "warn" if stale else "ok",
