@@ -86,6 +86,10 @@ other than its own.
 Screen Recording and Accessibility, and `vm up` grants it Automation for
 Finder and System Events, so `vm run preview` and `vm run finder` need no
 setup. `BQL_REAL_FILES` is not copied into the guest.
+An Apple Event sent before the grant leaves a consent prompt open in the
+guest for about 2 minutes. When that prompt expires, tccd replaces the grant
+with a deny. If `vm run finder` or a System Events call still times out after
+`vm up`, run `vm down` and `vm up`. Restarting tccd does not clear the prompt.
 Remove a VM you no longer need with `tart delete <name>`.
 
 The host-app recipes in [`features/host-app.md`](features/host-app.md) run
