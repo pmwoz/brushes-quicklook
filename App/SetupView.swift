@@ -8,12 +8,10 @@ struct SetupView: View {
         string: "x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.quicklook.preview"
     )!
 
-    private static var extensionSettingsPath: String {
-        if #available(macOS 15, *) {
-            "General > Login Items & Extensions > Quick Look"
-        } else {
-            "Privacy & Security > Extensions > Quick Look"
-        }
+    private static let extensionSettingsPath = if #available(macOS 15, *) {
+        "General > Login Items & Extensions > Quick Look"
+    } else {
+        "Privacy & Security > Extensions > Quick Look"
     }
 
     @Environment(\.openURL) private var openURL
