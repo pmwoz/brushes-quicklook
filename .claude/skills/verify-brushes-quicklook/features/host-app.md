@@ -68,7 +68,7 @@ Preconditions:
   then type the path in the panel with Command-Shift-G and press Return twice.
   A window named after the file opens. `click button 2 of group 1 of window "Brushes Quick Look"`
   ("Open Brush File…") opens the same panel.
-- **File menu.** With `ordered_set.brushset` open, list the menu with
+- **File menu.** Right after launch, and again with `ordered_set.brushset` open, list the menu with
   `osascript -l JavaScript -e 'const p = Application("System Events").processes.byName("BrushesQuickLook"); p.frontmost = true; delay(0.5); JSON.stringify(p.menuBars[0].menuBarItems.byName("File").menus[0].menuItems().map(i => i.title()))'`.
   It reads `Open…, Open Recent, "", Close, Close All, "", Share`. Command-S
   opens no sheet. Click the setup window and then the document window, close
