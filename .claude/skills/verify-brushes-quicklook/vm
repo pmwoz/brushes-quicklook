@@ -152,9 +152,9 @@ def cmd_up(args):
         emit({"ok": False, "vm": name, "boot_seconds": boot_seconds,
               "error": "Granting the guest agent Automation for Finder and System Events failed: "
                        f"{grant.stderr.strip() or grant.stdout.strip()}",
-              "fix": "The VM is running and every command except `vm run finder` works. `vm run finder` would wait "
-                     "60 s on a consent prompt. The grant needs `sqlite3` in the guest, SIP disabled and the TCC "
-                     "`access` table that GUEST_AUTOMATION writes."}, 1)
+              "fix": "The VM is running. Only the commands that drive Finder, `vm run finder` and `vm run hostile "
+                     "--via finder`, need the grant. Without it they wait 60 s on a consent prompt. The grant needs "
+                     "`sqlite3` in the guest, SIP disabled and the TCC `access` table that GUEST_AUTOMATION writes."}, 1)
     emit({"ok": True, "vm": name, "already_running": already_running, "boot_seconds": boot_seconds,
           "next": f"Run `vm sync --image {args.image}`."})
 
