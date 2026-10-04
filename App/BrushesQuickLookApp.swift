@@ -6,7 +6,9 @@ struct BrushesQuickLookApp: App {
 
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
-    private static let editingActions: Set<Selector> = [
+    // CommandGroup(replacing: .newItem) also removes Open and Open Recent on macOS 14.
+    private static let unsupportedActions: Set<Selector> = [
+        #selector(NSDocumentController.newDocument(_:)),
         #selector(NSDocument.save(_:)),
         #selector(NSDocument.saveAs(_:)),
         #selector(NSDocument.duplicate(_:)),
@@ -20,18 +22,18 @@ struct BrushesQuickLookApp: App {
         UserDefaults.standard.register(defaults: ["NSShowAppCentricOpenPanelInsteadOfUntitledFile": false])
         Task {
             let additions = NotificationCenter.default.notifications(named: NSMenu.didAddItemNotification)
-            Self.removeEditingItems()
-            // SwiftUI re-adds DocumentGroup's NSDocument items to the File menu when a document window closes.
+            Self.removeUnsupportedItems()
+            // SwiftUI re-adds DocumentGroup's document items to the File menu when a document window closes.
             for await _ in additions {
-                Self.removeEditingItems()
+                Self.removeUnsupportedItems()
             }
         }
     }
 
-    private static func removeEditingItems() {
+    private static func removeUnsupportedItems() {
         for menu in NSApp.mainMenu?.items.compactMap(\.submenu) ?? [] {
             for item in menu.items {
-                guard let action = item.action, editingActions.contains(action) else { continue }
+                guard let action = item.action, unsupportedActions.contains(action) else { continue }
                 let next = menu.index(of: item) + 1
                 // AppKit puts the "Revert To" submenu right after this item. The submenu is empty until it
                 // opens and shares its delegate class with Open Recent and Share, so position is its only identifier.
