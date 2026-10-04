@@ -87,9 +87,12 @@ for bundle in "$app" \
 
     manifest="$bundle/Contents/Resources/PrivacyInfo.xcprivacy"
     observed=$(plutil -lint "$manifest" 2>&1) || fail privacy "$observed"
+    count=$(plutil -extract NSPrivacyAccessedAPITypes raw -expect array -o - "$manifest" 2>&1) || fail privacy "$count"
     declared=
     i=0
-    while category=$(plutil -extract "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPIType" raw -o - "$manifest" 2>/dev/null); do
+    while [ "$i" -lt "$count" ]; do
+        category=$(plutil -extract "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPIType" raw -expect string -o - "$manifest" 2>&1) \
+            || fail privacy "$category"
         observed=$(plutil -extract "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPITypeReasons.0" raw -o - "$manifest" 2>&1) \
             || fail privacy "$category has no reason: $observed"
         declared="$declared ${category#NSPrivacyAccessedAPICategory}"
