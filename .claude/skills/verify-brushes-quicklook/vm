@@ -6,6 +6,7 @@ stdout like bql. `vm run` passes bql's own JSON and exit code through.
 """
 
 import argparse
+import contextlib
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -30,7 +31,7 @@ IMAGES = {"tahoe": "ghcr.io/cirruslabs/macos-tahoe-base:latest",
 GUEST_REPO = "/Users/admin/brushes-quicklook"
 BOOT_TIMEOUT = 180
 IDLE_SECONDS = 1800
-POLL_SECONDS = 10
+POLL_SECONDS = 2
 LIMIT_ERROR = "exceeds the system limit"
 LIMIT_FIX = ("Apple allows two running macOS VMs on a host. Stop one you own with `tart stop <name>` and rerun "
              "`vm up --image {image}`. Leave VMs of other sessions running.")
@@ -133,9 +134,8 @@ def cmd_up(args):
     if vm is None:
         raise Fail(f"No VM named {name}", f"Run `vm setup --image {args.image}`.")
     already_running = vm["State"] == "running"
-    log = vm_dir(name) / "tart-run.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
     used = mark_used(name)
+    log = vm_dir(name) / "tart-run.log"
     started = time.time()
     watcher = None
     if not already_running:
@@ -187,6 +187,7 @@ def cmd_sync(args):
         # xcodebuild registers its product with LaunchServices and pluginkit, so Quick Look on the host could route
         # to it.
         run([bql.LSREGISTER, "-u", str(BUILD)])
+    mark_used(name)
     listed = run(["git", "-C", str(REPO), "ls-files", "-z", "-c", "-o", "--exclude-standard"], check=True).stdout
     files = [f for f in listed.split("\0") if f and os.path.lexists(REPO / f)]
     note(f"copying {len(files)} files and the Release build into {name}")
@@ -245,23 +246,33 @@ def cmd_evidence(args):
 
 
 def used_by_tart_exec(name):
-    pattern = re.compile(rf"(^|/)tart exec( -\S+)* {re.escape(name)}( |$)")
+    pattern = re.compile(rf"^(\S*/)?tart exec( -\S+)* {re.escape(name)}( |$)")
     return any(pattern.search(line) for line in run(["ps", "-axo", "command="]).stdout.splitlines())
 
 
 def cmd_watch(args):
     tart = subprocess.Popen(["tart", "run", "--no-graphics", args.vm], stdin=subprocess.DEVNULL)
-    while tart.poll() is None:
-        if used_by_tart_exec(args.vm):
-            args.used.touch()
-        idle = time.time() - args.used.stat().st_mtime
-        if idle >= args.idle:
-            note(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} stopping {args.vm} after {round(idle)} s without use")
-            run(["tart", "stop", args.vm], timeout=120)
-        try:
-            tart.wait(timeout=min(POLL_SECONDS, args.idle))
-        except subprocess.TimeoutExpired:
-            pass
+    last_used = time.time()
+    try:
+        while tart.poll() is None:
+            if used_by_tart_exec(args.vm):
+                last_used = time.time()
+            # Removing the checkout deletes the file.
+            with contextlib.suppress(FileNotFoundError):
+                last_used = max(last_used, args.used.stat().st_mtime)
+            idle = time.time() - last_used
+            if idle >= args.idle:
+                note(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} stopping {args.vm} after {round(idle)} s without use")
+                run(["tart", "stop", args.vm], timeout=120)
+            try:
+                tart.wait(timeout=min(POLL_SECONDS, args.idle))
+            except subprocess.TimeoutExpired:
+                pass
+    finally:
+        # Nothing else would stop the VM once its watcher is gone.
+        if tart.poll() is None:
+            tart.kill()
+            tart.wait()
     sys.exit(tart.returncode)
 
 

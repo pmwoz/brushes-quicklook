@@ -1,3 +1,4 @@
+import argparse
 import importlib.machinery
 import importlib.util
 import io
@@ -92,10 +93,10 @@ class IdleStopTest(unittest.TestCase):
 case $1 in
     list) if [ -e "$FAKE_STOPPED.booted" ] && [ ! -e "$FAKE_STOPPED" ]; then printf '%s\\n' '{listed["running"]}'
           else printf '%s\\n' '{listed["stopped"]}'; fi ;;
-    run) touch "$FAKE_STOPPED.booted"
+    run) echo $$ > "$FAKE_STOPPED.pid"; mv "$FAKE_STOPPED.pid" "$FAKE_STOPPED.booted"
          test_dir=${{FAKE_STOPPED%/*}}
          while [ ! -e "$FAKE_STOPPED" ] && [ -d "$test_dir" ]; do sleep 0.1; done ;;
-    exec) sleep "${{FAKE_EXEC_SECONDS:-0}}"; printf '{{}}' ;;
+    exec) printf '{{}}' ;;
     stop) touch "$FAKE_STOPPED" ;;
 esac
 """)
@@ -103,7 +104,7 @@ esac
         self.env = {**os.environ, "PATH": f"{tmp.name}:{os.environ['PATH']}", "FAKE_STOPPED": str(self.stopped)}
 
     def vm(self, idle, *argv):
-        with mock.patch.dict(os.environ, self.env), mock.patch.dict(vm.__dict__, {"IDLE_SECONDS": idle}), \
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(vm, "IDLE_SECONDS", idle), \
                 mock.patch.object(vm, "WORK", self.root / "work"), mock.patch.object(sys, "argv", ["vm", *argv]), \
                 redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()), \
                 self.assertRaises(SystemExit) as exit:
@@ -124,19 +125,43 @@ esac
         log = (self.root / "work/vm" / vm.vm_name("tahoe") / "tart-run.log").read_text()
         self.assertIn("without use", log)
 
+    def test_a_vm_whose_checkout_was_removed_still_stops_after_the_idle_time(self):
+        booted = time.time()
+        self.vm(1, "up")
+        (self.root / "work/vm" / vm.vm_name("tahoe") / "used").unlink()
+        self.assertGreaterEqual(self.stop_time() - booted, 1)
+        log = (self.root / "work/vm" / vm.vm_name("tahoe") / "tart-run.log").read_text()
+        self.assertIn("without use", log)
+
     def test_every_vm_command_starts_the_idle_time_again(self):
-        self.vm(2, "up")
+        self.vm(3, "up")
         time.sleep(1.5)
         used = time.time()
-        self.vm(2, "run", "doctor")
-        self.assertGreaterEqual(self.stop_time() - used, 2)
+        self.vm(3, "run", "doctor")
+        self.assertGreaterEqual(self.stop_time() - used, 3)
 
     def test_a_live_tart_exec_into_the_vm_keeps_it_running(self):
         self.vm(1, "up")
+        (self.root / "exec").write_text("sleep 3\n")
         started = time.time()
-        subprocess.Popen([str(self.tart), "exec", vm.vm_name("tahoe"), "sh"],
-                         env={**self.env, "FAKE_EXEC_SECONDS": "3"}).wait()
+        # sh runs the script `exec` under argv[0] `tart`, so ps lists it like a real `tart exec <vm>`.
+        subprocess.run(["tart", "exec", vm.vm_name("tahoe")], executable="/bin/sh", cwd=self.root, check=True)
         self.assertGreaterEqual(self.stop_time() - started, 3)
+
+    def test_a_watcher_that_fails_ends_the_vm_it_runs(self):
+        booted = Path(f"{self.stopped}.booted")
+
+        def ps_fails(*_):
+            while not booted.exists():
+                time.sleep(0.05)
+            raise OSError("ps failed")
+
+        args = argparse.Namespace(vm=vm.vm_name("tahoe"), used=self.root / "used", idle=60)
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(vm, "run", ps_fails), \
+                self.assertRaises(OSError):
+            vm.cmd_watch(args)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int(booted.read_text()), 0)
 
 
 class GuestSyncTest(unittest.TestCase):

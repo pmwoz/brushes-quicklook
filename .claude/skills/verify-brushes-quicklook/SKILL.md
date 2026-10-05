@@ -66,9 +66,10 @@ vm down                           # stop the VM
 ```
 
 `vm up` boots the VM under a watcher process that stops it after 30
-minutes without use, also when the agent that ran `vm up` has exited. Every
-`vm` command against the VM and every running `tart exec` into it, such as a
-host-app recipe, count as use. The watcher logs the stop to
+minutes without use, also when the agent that ran `vm up` has exited.
+`vm up`, `vm sync`, `vm run` and `vm evidence` count as use. So does a
+`tart exec` into the VM, such as a host-app recipe, that runs when the
+watcher checks, every 2 seconds. The watcher logs the stop to
 `build.noindex/verify/vm/<vm>/tart-run.log`. Run `vm down` when verification
 ends, so the VM does not hold a VM slot for those 30 minutes. A VM started
 with `tart run` by hand has no watcher.
