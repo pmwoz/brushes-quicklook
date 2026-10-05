@@ -193,6 +193,16 @@ esac
             self.assertLess(time.time(), deadline, "tart run still runs 10 s after its watcher got SIGTERM")
             time.sleep(0.1)
 
+    def test_vm_up_puts_a_vm_whose_watcher_got_kill_9_back_under_the_idle_stop(self):
+        self.vm(60, "up")
+        tart = self.tart_run_pid()
+        watcher = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(tart)], capture_output=True, text=True,
+                                     check=True).stdout)
+        os.kill(watcher, signal.SIGKILL)
+        up = time.time()
+        self.vm(1, "up")
+        self.assertGreaterEqual(self.stop_time() - up, 1)
+
     def test_a_watcher_that_fails_ends_the_vm_it_runs(self):
         booted = Path(f"{self.stopped}.booted")
 
