@@ -105,8 +105,9 @@ on a VM booted with `tart run`, opens a consent prompt that stays pending for
 about 2 minutes. Until it expires, events to that app hang even with the
 grant. When it expires, tccd replaces the grant with a deny. So `vm run
 finder` or a System Events call can still time out after `vm up`, and `bql`
-exits 2 with a `TimeoutExpired` on `osascript`. Run `vm down` and `vm up`
-with the same `--image`. Restarting tccd or System Events does not help.
+exits 2 because `osascript` did not return within 60 s. Run `vm down` and
+`vm up` with the same `--image`. Restarting tccd or System Events does not
+help.
 
 The host-app recipes in [`features/host-app.md`](features/host-app.md) run
 in the guest on both images. Run the `bql` ones with `vm run`, and install
