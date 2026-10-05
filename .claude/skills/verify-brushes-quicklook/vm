@@ -17,6 +17,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -33,7 +34,6 @@ GUEST_REPO = "/Users/admin/brushes-quicklook"
 BOOT_TIMEOUT = 180
 IDLE_SECONDS = 1800
 EXEC_SECONDS = 7200
-BUILD_SECONDS = 1800
 POLL_SECONDS = 2
 LIMIT_ERROR = "exceeds the system limit"
 LIMIT_FIX = ("Apple allows two running macOS VMs on a host. Stop one you own with `tart stop <name>` and rerun "
@@ -89,14 +89,16 @@ def vm_dir(name):
     return WORK / "vm" / name
 
 
-def mark_used(name, until=None):
-    """A time in the future counts as use until then, for host work that does not touch the VM."""
+def mark_used(name):
     used = vm_dir(name) / "used"
     used.parent.mkdir(parents=True, exist_ok=True)
     used.touch()
-    if until:
-        os.utime(used, (until, until))
     return used
+
+
+def mark_used_until(name, done):
+    while not done.wait(POLL_SECONDS):
+        mark_used(name)
 
 
 def vms():
@@ -182,19 +184,22 @@ def cmd_up(args):
 def cmd_sync(args):
     name = running(args.image)
     note("building Release on the host, this takes a few minutes")
-    mark_used(name, until=time.time() + BUILD_SECONDS * len(HOST_BUILD))
+    built = threading.Event()
+    # The host build does not touch the VM.
+    threading.Thread(target=mark_used_until, args=(name, built), daemon=True).start()
     try:
         for command in HOST_BUILD:
-            proc = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=BUILD_SECONDS)
+            proc = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=1800)
             if proc.returncode != 0:
                 emit({"ok": False, "failed_step": command[0],
                       "error": (proc.stderr.strip() or proc.stdout.strip())[-2000:],
                       "fix": f"Run `{' '.join(command)}` in {REPO} to see the full output."}, 1)
     finally:
-        mark_used(name)
+        built.set()
         # xcodebuild registers its product with LaunchServices and pluginkit, so Quick Look on the host could route
         # to it.
         run([bql.LSREGISTER, "-u", str(BUILD)])
+    mark_used(name)
     listed = run(["git", "-C", str(REPO), "ls-files", "-z", "-c", "-o", "--exclude-standard"], check=True).stdout
     files = [f for f in listed.split("\0") if f and os.path.lexists(REPO / f)]
     note(f"copying {len(files)} files and the Release build into {name}")
@@ -261,9 +266,9 @@ def tart_exec_pids(name):
 def cmd_watch(args):
     # Turns `kill` into an exception, so the `finally` below stops the VM.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM))
-    tart = subprocess.Popen(["tart", "run", "--no-graphics", args.vm], stdin=subprocess.DEVNULL)
-    last_used = marked = time.time()
+    last_used = time.time()
     first_seen = {}
+    tart = subprocess.Popen(["tart", "run", "--no-graphics", args.vm], stdin=subprocess.DEVNULL)
     try:
         while tart.poll() is None:
             now = time.time()
@@ -272,8 +277,8 @@ def cmd_watch(args):
             last_used = max([last_used, *(min(now, seen + args.exec_limit) for seen in first_seen.values())])
             # Removing the checkout deletes the file.
             with contextlib.suppress(FileNotFoundError):
-                marked = args.used.stat().st_mtime
-            idle = time.time() - max(last_used, marked)
+                last_used = max(last_used, args.used.stat().st_mtime)
+            idle = now - last_used
             if idle >= args.idle:
                 note(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} stopping {args.vm} after {round(idle)} s without use")
                 run(["tart", "stop", args.vm], timeout=120)

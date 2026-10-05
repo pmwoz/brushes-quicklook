@@ -115,7 +115,9 @@ esac
 
     def tart_run_pid(self):
         booted = Path(f"{self.stopped}.booted")
+        deadline = time.time() + 20
         while not booted.exists():
+            self.assertLess(time.time(), deadline, "tart run did not start within 20 s")
             time.sleep(0.05)
         return int(booted.read_text())
 
