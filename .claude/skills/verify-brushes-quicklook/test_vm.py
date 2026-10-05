@@ -39,7 +39,7 @@ class FakeTartTest(unittest.TestCase):
         tart.write_text(f"""#!/bin/sh
 case $1 in
     list) printf '%s\\n' '{json.dumps(listed)}' ;;
-    run) printf '%s\\n' '{LIMIT}' >&2; exit 1 ;;
+    run) printf '%s\\n' '{LIMIT}' >&2; exit ${{FAKE_RUN_EXIT:-1}} ;;
     exec) shift; printf '%s\\n' "$@" > "$FAKE_ARGV"; printf '%s' "$FAKE_STDOUT"; exit 1 ;;
 esac
 """)
@@ -47,20 +47,26 @@ esac
         self.work = Path(tmp.name) / "work"
         return {**os.environ, "PATH": f"{tmp.name}:{os.environ['PATH']}"}
 
-    def test_up_fails_at_once_with_tarts_error_and_the_running_vms_when_tart_run_exits(self):
-        env = self.fake_tart("stopped")
+    def up_with_a_vm_that_tart_run_cannot_boot(self, run_exit):
+        env = {**self.fake_tart("stopped"), "FAKE_RUN_EXIT": run_exit}
         stdout = io.StringIO()
         started = time.time()
         with mock.patch.dict(os.environ, env), mock.patch.object(vm, "WORK", self.work), \
                 mock.patch.object(sys, "argv", ["vm", "up"]), redirect_stdout(stdout), redirect_stderr(io.StringIO()), \
                 self.assertRaises(SystemExit) as exit:
             vm.main()
-        result = json.loads(stdout.getvalue())
         self.assertEqual(exit.exception.code, 1)
         self.assertLess(time.time() - started, 10)
+        return json.loads(stdout.getvalue())
+
+    def test_up_fails_at_once_with_tarts_error_and_the_running_vms_when_tart_run_exits(self):
+        result = self.up_with_a_vm_that_tart_run_cannot_boot("1")
         self.assertIn(LIMIT, result["error"])
         self.assertEqual(result["running_vms"], ["abr-verify", "bql-exp"])
         self.assertIn("tart stop", result["fix"])
+
+    def test_up_fails_at_once_when_tart_run_exits_0_during_the_boot(self):
+        self.assertIn("The watcher exited 0", self.up_with_a_vm_that_tart_run_cannot_boot("0")["error"])
 
     def run_vm(self, stdout):
         env = {**self.fake_tart("running"), "FAKE_ARGV": str(self.work.parent / "argv"), "FAKE_STDOUT": stdout}

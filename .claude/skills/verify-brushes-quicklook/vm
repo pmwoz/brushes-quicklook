@@ -156,14 +156,14 @@ def cmd_up(args):
     if not already_running:
         note(f"booting {name}")
     # A VM that runs already, whose watcher got `kill -9` or that `tart run` started by hand, gets a watcher that adopts
-    # it. That watcher exits 0 when another watcher has the VM.
+    # it. That watcher exits 0 when another watcher has the VM, which is no failure.
     with log.open("a" if already_running else "w") as out:
         watcher = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "watch", name, str(used),
                                     str(IDLE_SECONDS), str(EXEC_SECONDS), *(["--adopt"] if already_running else [])],
                                    stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                    start_new_session=True)
     while time.time() - started < BOOT_TIMEOUT:
-        if watcher.poll():
+        if watcher.poll() is not None and (watcher.returncode or not already_running):
             output = log.read_text().strip()
             emit({"ok": False, "vm": name, "log": str(log),
                   "running_vms": sorted(other["Name"] for other in vms() if other["State"] == "running"),
