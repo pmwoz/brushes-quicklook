@@ -68,13 +68,24 @@ git add -A
 # answer. The cirruslabs images run with SIP disabled, so the agent can write its own grant. launchd starts the agent by
 # its absolute path, which `ps -o comm=` prints, and the resolved path carries the agent's version. tccd holds the
 # database open.
-GUEST_AUTOMATION = """
+# On macOS 26, replayd shows a "bypass the system private window picker" alert over the screen after the
+# agent's first capture. It reads ScreenCaptureApprovals.plist at that capture and skips the alert when the agent's
+# kScreenCaptureApprovalLastUsed is recent. A missing entry, or one that is 65 days old, raises it.
+GUEST_GRANTS = """
 set -eu
 agent=$(realpath "$(ps -o comm= -p $PPID)")
 sqlite3 -cmd ".timeout 10000" "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access
     (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier_type,
     indirect_object_identifier) VALUES ('kTCCServiceAppleEvents', '$agent', 1, 2, 0, 1, 0, 'com.apple.finder'),
     ('kTCCServiceAppleEvents', '$agent', 1, 2, 0, 1, 0, 'com.apple.systemevents')"
+approvals="$HOME/Library/Group Containers/group.com.apple.replayd"
+mkdir -p "$approvals"
+cat > "$approvals/ScreenCaptureApprovals.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>$agent</key><dict>
+<key>kScreenCaptureApprovalLastUsed</key><date>$(date -u +%Y-%m-%dT%H:%M:%SZ)</date>
+</dict></dict></plist>
+PLIST
 """
 
 HOST_BUILD = [["scripts/build.sh"], ["scripts/check-build.sh", str(BUILD)]]
@@ -168,15 +179,16 @@ def cmd_up(args):
                        f"{log.read_text().strip()[-2000:]}",
               "fix": f"Read {log}, run `vm down --image {args.image}` and `vm up --image {args.image}` again."}, 1)
     boot_seconds = round(time.time() - started, 1)
-    grant = run(["tart", "exec", name, "sh", "-c", GUEST_AUTOMATION], timeout=60)
+    grant = run(["tart", "exec", name, "sh", "-c", GUEST_GRANTS], timeout=60)
     if grant.returncode != 0:
         emit({"ok": False, "vm": name, "boot_seconds": boot_seconds,
-              "error": "Granting the guest agent Automation for Finder and System Events failed: "
-                       f"{grant.stderr.strip() or grant.stdout.strip()}",
+              "error": "Granting the guest agent Automation for Finder and System Events, or approving its screen "
+                       f"captures, failed: {grant.stderr.strip() or grant.stdout.strip()}",
               "fix": "The VM is running. Only `vm run finder`, `vm run hostile --via finder` and the host-app recipes "
                      "that call System Events need the grant. Without it they wait on a consent prompt until they time "
                      "out. The grant needs `sqlite3` in the guest, SIP disabled and the TCC `access` table that "
-                     "GUEST_AUTOMATION writes."}, 1)
+                     "GUEST_GRANTS writes. Without the approval, an alert can cover the middle of full-screen "
+                     "captures."}, 1)
     emit({"ok": True, "vm": name, "already_running": already_running, "boot_seconds": boot_seconds,
           "next": f"Run `vm sync --image {args.image}`."})
 
@@ -310,7 +322,7 @@ def main():
     for name, help_text in [
         ("setup", "clone the image into this checkout's VM unless it exists"),
         ("up", "boot the VM headless, wait for its guest agent, grant it Automation for Finder and System Events, "
-               "fail fast when Tart cannot start it"),
+               "approve its screen captures, fail fast when Tart cannot start it"),
         ("sync", "build Release on the host and copy the checkout and the build into the guest"),
         ("run", "run bql in the guest with the arguments that follow, passing its output and exit code through"),
         ("evidence", "copy the guest's bql evidence to build.noindex/verify/vm/<vm>/evidence on the host"),

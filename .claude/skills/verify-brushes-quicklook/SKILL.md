@@ -57,7 +57,7 @@ The guest needs no Xcode.
 
 ```
 vm setup [--image tahoe|sonoma]   # clone the cirruslabs base image into this checkout's VM, once
-vm up                             # boot it headless, wait for the guest agent, grant it Automation for Finder and System Events
+vm up                             # boot it headless, wait for the guest agent, grant it Automation for Finder and System Events, approve its screen captures
 vm sync                           # build Release on the host, unregister that build on the host, copy the checkout and the build into the guest
 vm run install --no-build         # bql install in the guest, with the host's build
 vm run doctor                     # any bql subcommand: vm run <bql args>
@@ -99,6 +99,21 @@ Screen Recording and Accessibility, and `vm up` grants it Automation for
 Finder and System Events, so `vm run preview` and `vm run finder` need no
 setup. `BQL_REAL_FILES` is not copied into the guest.
 Remove a VM you no longer need with `tart delete <name>`.
+
+On the tahoe image (macOS 26), the first capture by an app outside the system
+window picker opens an alert in the middle of the screen: "“tart-guest-agent”
+is requesting to bypass the system private window picker and directly access
+your screen and audio", with the buttons Allow and Open System Settings. It
+covers the middle of full-screen captures that follow. `vm up` records a
+recent capture for the guest agent in
+`~/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist`
+before any capture, so the alert does not open. When a capture ran before `vm up`, for
+example on a VM booted with `tart run`, the alert can be open. Close it in the
+guest:
+
+```
+tart exec <vm> osascript -e 'tell application "System Events" to click button "Allow" of window 1 of process "UserNotificationCenter"'
+```
 
 An Apple Event sent in the guest before `vm up` wrote the grant, for example
 on a VM booted with `tart run`, opens a consent prompt that stays pending for

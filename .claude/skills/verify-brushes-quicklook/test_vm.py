@@ -259,8 +259,8 @@ TCC_ACCESS = """CREATE TABLE access (    service        TEXT        NOT NULL,   
     FOREIGN KEY (policy_id) REFERENCES policies(id) ON DELETE CASCADE ON UPDATE CASCADE)"""
 
 
-class GuestAutomationTest(unittest.TestCase):
-    """Runs the guest half of `vm up` on this Mac against a temporary TCC database."""
+class GuestGrantsTest(unittest.TestCase):
+    """Runs the guest half of `vm up` on this Mac against a temporary home."""
 
     def test_its_parent_gets_automation_for_finder_and_system_events_once_while_tccd_holds_a_lock(self):
         with tempfile.TemporaryDirectory() as home:
@@ -273,7 +273,7 @@ class GuestAutomationTest(unittest.TestCase):
                 if attempt == 0:
                     tccd.execute("BEGIN EXCLUSIVE")
                 # zsh stands in for the guest agent. The trailing command keeps zsh from exec'ing sh in its place.
-                grant = subprocess.Popen(["/bin/zsh", "-c", 'sh -c "$1"; exit $?', "zsh", vm.GUEST_AUTOMATION],
+                grant = subprocess.Popen(["/bin/zsh", "-c", 'sh -c "$1"; exit $?', "zsh", vm.GUEST_GRANTS],
                                          env={**os.environ, "HOME": home}, stderr=subprocess.PIPE, text=True)
                 if attempt == 0:
                     time.sleep(1)
@@ -290,7 +290,7 @@ class GuestAutomationTest(unittest.TestCase):
             db.parent.mkdir(parents=True)
             with sqlite3.connect(db) as tccd:
                 tccd.execute(TCC_ACCESS)
-            grant = subprocess.run(["/bin/zsh", "-c", 'sh -c "$1"; exit $?', "zsh", vm.GUEST_AUTOMATION],
+            grant = subprocess.run(["/bin/zsh", "-c", 'sh -c "$1"; exit $?', "zsh", vm.GUEST_GRANTS],
                                    env={**os.environ, "HOME": home}, capture_output=True, text=True, timeout=30)
             self.assertEqual(grant.returncode, 0, grant.stderr)
             approvals = Path(home, "Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist")
