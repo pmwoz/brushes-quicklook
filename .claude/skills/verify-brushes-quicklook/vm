@@ -70,8 +70,8 @@ git add -A
 # database open.
 # On macOS 26, replayd shows a "bypass the system private window picker" alert over the screen after the
 # agent's first capture. It reads ScreenCaptureApprovals.plist at the first capture after it starts and skips the alert
-# when the agent's kScreenCaptureApprovalLastUsed is recent. The current time passed. A missing entry, or one that was
-# 65 days old, raised the alert. After that first capture replayd keeps its own copy, so a later write has no effect.
+# when the agent's kScreenCaptureApprovalLastUsed is recent. The current time stopped the alert. A missing entry, or one
+# that was 65 days old, raised it. After that first capture replayd keeps its own copy, so a later write has no effect.
 GUEST_GRANTS = """
 set -eu
 agent=$(realpath "$(ps -o comm= -p $PPID)")
