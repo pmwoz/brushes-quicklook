@@ -68,9 +68,15 @@ git add -A
 # answer. The cirruslabs images run with SIP disabled, so the agent can write its own grant. launchd starts the agent by
 # its absolute path, which `ps -o comm=` prints, and the resolved path carries the agent's version. tccd holds the
 # database open.
-GUEST_AUTOMATION = """
+# On macOS 26, replayd shows a "bypass the system private window picker" alert over the screen after the
+# agent's first capture. It reads ScreenCaptureApprovals.plist at the first capture after it starts and skips the alert
+# when the agent's kScreenCaptureApprovalLastUsed is recent. The current time stopped the alert. A missing entry, or one
+# that was 65 days old, raised it. After that first capture replayd keeps its own copy, so a later write has no effect.
+GUEST_GRANTS = """
 set -eu
 agent=$(realpath "$(ps -o comm= -p $PPID)")
+defaults write "$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals" "$agent" \
+    -dict-add kScreenCaptureApprovalLastUsed -date "$(date -u '+%Y-%m-%d %H:%M:%S +0000')"
 sqlite3 -cmd ".timeout 10000" "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access
     (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier_type,
     indirect_object_identifier) VALUES ('kTCCServiceAppleEvents', '$agent', 1, 2, 0, 1, 0, 'com.apple.finder'),
@@ -168,15 +174,16 @@ def cmd_up(args):
                        f"{log.read_text().strip()[-2000:]}",
               "fix": f"Read {log}, run `vm down --image {args.image}` and `vm up --image {args.image}` again."}, 1)
     boot_seconds = round(time.time() - started, 1)
-    grant = run(["tart", "exec", name, "sh", "-c", GUEST_AUTOMATION], timeout=60)
+    grant = run(["tart", "exec", name, "sh", "-c", GUEST_GRANTS], timeout=60)
     if grant.returncode != 0:
         emit({"ok": False, "vm": name, "boot_seconds": boot_seconds,
-              "error": "Granting the guest agent Automation for Finder and System Events failed: "
-                       f"{grant.stderr.strip() or grant.stdout.strip()}",
-              "fix": "The VM is running. Only `vm run finder`, `vm run hostile --via finder` and the host-app recipes "
-                     "that call System Events need the grant. Without it they wait on a consent prompt until they time "
-                     "out. The grant needs `sqlite3` in the guest, SIP disabled and the TCC `access` table that "
-                     "GUEST_AUTOMATION writes."}, 1)
+              "error": "Granting the guest agent Automation for Finder and System Events, or approving its screen "
+                       f"captures, failed: {grant.stderr.strip() or grant.stdout.strip()}",
+              "fix": f"The VM is running. Fix the cause in the error, then run `vm up --image {args.image}` again. "
+                     "Without the screen capture approval, an alert covers the middle of full-screen captures. "
+                     "Without the Automation grant, `vm run finder`, `vm run hostile --via finder` and the host-app "
+                     "recipes that call System Events wait on a consent prompt until they time out. The grant needs "
+                     "`sqlite3` in the guest, SIP disabled and the TCC `access` table that GUEST_GRANTS writes."}, 1)
     emit({"ok": True, "vm": name, "already_running": already_running, "boot_seconds": boot_seconds,
           "next": f"Run `vm sync --image {args.image}`."})
 
@@ -310,7 +317,7 @@ def main():
     for name, help_text in [
         ("setup", "clone the image into this checkout's VM unless it exists"),
         ("up", "boot the VM headless, wait for its guest agent, grant it Automation for Finder and System Events, "
-               "fail fast when Tart cannot start it"),
+               "approve its screen captures, fail fast when Tart cannot start it"),
         ("sync", "build Release on the host and copy the checkout and the build into the guest"),
         ("run", "run bql in the guest with the arguments that follow, passing its output and exit code through"),
         ("evidence", "copy the guest's bql evidence to build.noindex/verify/vm/<vm>/evidence on the host"),
