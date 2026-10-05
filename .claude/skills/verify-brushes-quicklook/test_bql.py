@@ -439,5 +439,27 @@ class CleanupTest(unittest.TestCase):
         self.assertEqual((code, signals, result["ended_app_instances"]), (0, [(200, 15)], [mine]))
 
 
+class HungOsascriptTest(unittest.TestCase):
+    @staticmethod
+    def hang(args, timeout=120, **kwargs):
+        raise bql.subprocess.TimeoutExpired(args, timeout)
+
+    def test_a_hung_apple_event_exits_2_naming_its_app_the_automation_pane_and_the_vm_recovery(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        work = Path(tmp.name)
+        (work / "state.json").write_text(json.dumps({"finder_windows": [7]}))
+        code, result = run_bql("cleanup", run=self.hang, WORK=work, STATE=work / "state.json",
+                               FIXTURES=work / "fixtures", EVIDENCE=work / "evidence")
+        self.assertEqual((code, result["ok"]), (2, False))
+        self.assertIn("Automation prompt", result["error"])
+        for recovery in ("control Finder in System Settings > Privacy & Security > Automation", "`vm down`", "`vm up`"):
+            self.assertIn(recovery, result["fix"])
+
+    def test_a_hung_script_that_sends_no_apple_event_stays_an_unexpected_error(self):
+        with mock.patch.object(bql, "run", self.hang), self.assertRaises(bql.subprocess.TimeoutExpired):
+            bql.osascript(bql.WINDOWS_JS, language="JavaScript")
+
+
 if __name__ == "__main__":
     unittest.main()
