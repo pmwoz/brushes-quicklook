@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -202,6 +203,30 @@ esac
         up = time.time()
         self.vm(1, "up")
         self.assertGreaterEqual(self.stop_time() - up, 1)
+
+    def test_a_second_watcher_on_a_watched_vm_neither_runs_nor_stops_it(self):
+        self.vm(60, "up")
+        tart = self.tart_run_pid()
+        outcomes = {}
+
+        def watch(adopt):
+            args = argparse.Namespace(vm=vm.vm_name("tahoe"), used=self.root / "work/vm" / vm.vm_name("tahoe") / "used",
+                                      idle=60, exec_limit=60, adopt=adopt)
+            try:
+                vm.cmd_watch(args)
+                outcomes[adopt] = "returned"
+            except vm.Fail as failure:
+                outcomes[adopt] = failure.error
+
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(vm, "LOCK_SECONDS", 1), \
+                mock.patch.object(signal, "signal"):
+            for adopt in (True, False):
+                watcher = threading.Thread(target=watch, args=(adopt,), daemon=True)
+                watcher.start()
+                watcher.join(5)
+        self.assertEqual(outcomes, {True: "returned", False: f"Another `vm watch` has {vm.vm_name('tahoe')}"})
+        self.assertEqual(int(Path(f"{self.stopped}.booted").read_text()), tart)
+        self.assertFalse(self.stopped.exists())
 
     def test_a_watcher_that_fails_ends_the_vm_it_runs(self):
         booted = Path(f"{self.stopped}.booted")

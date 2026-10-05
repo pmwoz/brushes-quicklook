@@ -36,6 +36,7 @@ BOOT_TIMEOUT = 180
 IDLE_SECONDS = 1800
 EXEC_SECONDS = 7200
 POLL_SECONDS = 2
+LOCK_SECONDS = 10
 LIMIT_ERROR = "exceeds the system limit"
 LIMIT_FIX = ("Apple allows two running macOS VMs on a host. Stop one you own with `tart stop <name>` and rerun "
              "`vm up --image {image}`. Leave VMs of other sessions running.")
@@ -155,18 +156,18 @@ def cmd_up(args):
     if not already_running:
         note(f"booting {name}")
     # A VM that runs already, whose watcher got `kill -9` or that `tart run` started by hand, gets a watcher that adopts
-    # it. That watcher exits at once when the VM has one.
+    # it. That watcher exits 0 when another watcher has the VM.
     with log.open("a" if already_running else "w") as out:
         watcher = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "watch", name, str(used),
                                     str(IDLE_SECONDS), str(EXEC_SECONDS), *(["--adopt"] if already_running else [])],
                                    stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                    start_new_session=True)
     while time.time() - started < BOOT_TIMEOUT:
-        if not already_running and watcher.poll() is not None:
+        if watcher.poll():
             output = log.read_text().strip()
             emit({"ok": False, "vm": name, "log": str(log),
                   "running_vms": sorted(other["Name"] for other in vms() if other["State"] == "running"),
-                  "error": f"tart run exited {watcher.returncode}: {output}",
+                  "error": f"The watcher exited {watcher.returncode}: {output}",
                   "fix": LIMIT_FIX.format(image=args.image) if LIMIT_ERROR in output else f"Read {log}."}, 1)
         if guest_ready(name):
             break
@@ -273,14 +274,22 @@ def tart_exec_pids(name):
 
 
 def cmd_watch(args):
-    # Turns `kill` into an exception, so the `finally` below stops the VM.
+    # Turns `kill` into an exception, so the `except` below stops the VM.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM))
     # The kernel releases the lock when the watcher dies, also on `kill -9`, so the next `vm up` adopts its VM.
     lock = os.open(args.used.with_name("watch.lock"), os.O_WRONLY | os.O_CREAT)
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | (fcntl.LOCK_NB if args.adopt else 0))
-    except BlockingIOError:
-        return
+    # A watcher whose VM has just stopped holds the lock until its next check, so a booting watcher waits that long.
+    deadline = time.time() + LOCK_SECONDS
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if args.adopt:
+                return
+            if time.time() >= deadline:
+                raise Fail(f"Another `vm watch` has {args.vm}", "Run `vm up` again.") from None
+            time.sleep(0.2)
     last_used = time.time()
     first_seen = {}
     tart = None if args.adopt else subprocess.Popen(["tart", "run", "--no-graphics", args.vm],
@@ -304,18 +313,15 @@ def cmd_watch(args):
             if idle >= args.idle:
                 note(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} stopping {args.vm} after {round(idle)} s without use")
                 run(["tart", "stop", args.vm], timeout=120)
-            if tart:
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    tart.wait(timeout=min(POLL_SECONDS, args.idle))
-            else:
-                time.sleep(min(POLL_SECONDS, args.idle))
-    finally:
+            time.sleep(min(POLL_SECONDS, args.idle))
+    except BaseException:
         # Nothing else would stop the VM once its watcher is gone.
-        if not tart:
-            run(["tart", "stop", args.vm], timeout=120)
-        elif tart.poll() is None:
+        if tart:
             tart.kill()
             tart.wait()
+        else:
+            run(["tart", "stop", args.vm], timeout=120)
+        raise
     if tart:
         sys.exit(tart.returncode)
 
