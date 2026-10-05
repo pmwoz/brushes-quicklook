@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -38,7 +39,7 @@ class FakeTartTest(unittest.TestCase):
         tart.write_text(f"""#!/bin/sh
 case $1 in
     list) printf '%s\\n' '{json.dumps(listed)}' ;;
-    run) printf '%s\\n' '{LIMIT}' >&2; exit 1 ;;
+    run) printf '%s\\n' '{LIMIT}' >&2; exit ${{FAKE_RUN_EXIT:-1}} ;;
     exec) shift; printf '%s\\n' "$@" > "$FAKE_ARGV"; printf '%s' "$FAKE_STDOUT"; exit 1 ;;
 esac
 """)
@@ -46,20 +47,26 @@ esac
         self.work = Path(tmp.name) / "work"
         return {**os.environ, "PATH": f"{tmp.name}:{os.environ['PATH']}"}
 
-    def test_up_fails_at_once_with_tarts_error_and_the_running_vms_when_tart_run_exits(self):
-        env = self.fake_tart("stopped")
+    def up_with_a_vm_that_tart_run_cannot_boot(self, run_exit):
+        env = {**self.fake_tart("stopped"), "FAKE_RUN_EXIT": run_exit}
         stdout = io.StringIO()
         started = time.time()
         with mock.patch.dict(os.environ, env), mock.patch.object(vm, "WORK", self.work), \
                 mock.patch.object(sys, "argv", ["vm", "up"]), redirect_stdout(stdout), redirect_stderr(io.StringIO()), \
                 self.assertRaises(SystemExit) as exit:
             vm.main()
-        result = json.loads(stdout.getvalue())
         self.assertEqual(exit.exception.code, 1)
         self.assertLess(time.time() - started, 10)
+        return json.loads(stdout.getvalue())
+
+    def test_up_fails_at_once_with_tarts_error_and_the_running_vms_when_tart_run_exits(self):
+        result = self.up_with_a_vm_that_tart_run_cannot_boot("1")
         self.assertIn(LIMIT, result["error"])
         self.assertEqual(result["running_vms"], ["abr-verify", "bql-exp"])
         self.assertIn("tart stop", result["fix"])
+
+    def test_up_fails_at_once_when_tart_run_exits_0_during_the_boot(self):
+        self.assertIn("The watcher exited 0", self.up_with_a_vm_that_tart_run_cannot_boot("0")["error"])
 
     def run_vm(self, stdout):
         env = {**self.fake_tart("running"), "FAKE_ARGV": str(self.work.parent / "argv"), "FAKE_STDOUT": stdout}
@@ -193,6 +200,40 @@ esac
             self.assertLess(time.time(), deadline, "tart run still runs 10 s after its watcher got SIGTERM")
             time.sleep(0.1)
 
+    def test_vm_up_puts_a_vm_whose_watcher_got_kill_9_back_under_the_idle_stop(self):
+        self.vm(60, "up")
+        tart = self.tart_run_pid()
+        watcher = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(tart)], capture_output=True, text=True,
+                                     check=True).stdout)
+        os.kill(watcher, signal.SIGKILL)
+        up = time.time()
+        self.vm(1, "up")
+        self.assertGreaterEqual(self.stop_time() - up, 1)
+
+    def test_a_second_watcher_on_a_watched_vm_neither_runs_nor_stops_it(self):
+        self.vm(60, "up")
+        tart = self.tart_run_pid()
+        outcomes = {}
+
+        def watch(adopt):
+            args = argparse.Namespace(vm=vm.vm_name("tahoe"), used=self.root / "work/vm" / vm.vm_name("tahoe") / "used",
+                                      idle=60, exec_limit=60, adopt=adopt)
+            try:
+                vm.cmd_watch(args)
+                outcomes[adopt] = "returned"
+            except vm.Fail as failure:
+                outcomes[adopt] = failure.error
+
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(vm, "LOCK_SECONDS", 1), \
+                mock.patch.object(signal, "signal"):
+            for adopt in (True, False):
+                watcher = threading.Thread(target=watch, args=(adopt,), daemon=True)
+                watcher.start()
+                watcher.join(5)
+        self.assertEqual(outcomes, {True: "returned", False: f"Another `vm watch` has {vm.vm_name('tahoe')}"})
+        self.assertEqual(int(Path(f"{self.stopped}.booted").read_text()), tart)
+        self.assertFalse(self.stopped.exists())
+
     def test_a_watcher_that_fails_ends_the_vm_it_runs(self):
         booted = Path(f"{self.stopped}.booted")
 
@@ -201,7 +242,8 @@ esac
                 time.sleep(0.05)
             raise OSError("ps failed")
 
-        args = argparse.Namespace(vm=vm.vm_name("tahoe"), used=self.root / "used", idle=60, exec_limit=60)
+        args = argparse.Namespace(vm=vm.vm_name("tahoe"), used=self.root / "used", idle=60, exec_limit=60,
+                                  adopt=False)
         with mock.patch.dict(os.environ, self.env), mock.patch.object(vm, "run", ps_fails), \
                 self.assertRaises(OSError):
             vm.cmd_watch(args)
