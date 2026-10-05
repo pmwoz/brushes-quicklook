@@ -185,7 +185,6 @@ def cmd_sync(args):
     name = running(args.image)
     note("building Release on the host, this takes a few minutes")
     built = threading.Event()
-    # The host build does not touch the VM.
     threading.Thread(target=mark_used_until, args=(name, built), daemon=True).start()
     try:
         for command in HOST_BUILD:
@@ -273,7 +272,6 @@ def cmd_watch(args):
         while tart.poll() is None:
             now = time.time()
             first_seen = {pid: first_seen.get(pid, now) for pid in tart_exec_pids(args.vm)}
-            # A guest command that never returns must not hold the VM forever.
             last_used = max([last_used, *(min(now, seen + args.exec_limit) for seen in first_seen.values())])
             # Removing the checkout deletes the file.
             with contextlib.suppress(FileNotFoundError):
