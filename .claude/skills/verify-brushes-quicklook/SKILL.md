@@ -67,12 +67,15 @@ vm down                           # stop the VM
 
 `vm up` boots the VM under a watcher process that stops it after 30
 minutes without use, also when the agent that ran `vm up` has exited.
-`vm up`, `vm sync`, `vm run` and `vm evidence` count as use. So does a
-`tart exec` into the VM, such as a host-app recipe, that runs when the
-watcher checks, every 2 seconds. The watcher logs the stop to
-`build.noindex/verify/vm/<vm>/tart-run.log`. Run `vm down` when verification
-ends, so the VM does not hold a VM slot for those 30 minutes. A VM started
-with `tart run` by hand has no watcher.
+`vm up`, `vm sync`, `vm run` and `vm evidence` count as use, and `vm sync`
+counts during its host build too. So does a `tart exec` into the VM, such as
+a host-app recipe, for its first 2 hours, so a guest command that never
+returns cannot hold the VM. The watcher checks every 2 seconds, so a `tart
+exec` that starts and ends between two checks does not count. The watcher
+logs the stop to `build.noindex/verify/vm/<vm>/tart-run.log`. Run `vm down`
+when verification ends, so the VM does not hold a VM slot for those 30
+minutes. `kill` on the watcher stops the VM too, but `kill -9` leaves it
+running until `vm down`. A VM started with `tart run` by hand has no watcher.
 
 `vm` keeps `bql`'s contract: one JSON object on stdout and exit codes 0, 1
 and 2. `vm run` prints the guest `bql`'s JSON and exits with its code. Paths
