@@ -1,9 +1,11 @@
 import argparse
+import datetime
 import importlib.machinery
 import importlib.util
 import io
 import json
 import os
+import plistlib
 import signal
 import sqlite3
 import subprocess
@@ -281,6 +283,21 @@ class GuestAutomationTest(unittest.TestCase):
                                 "FROM access ORDER BY indirect_object_identifier").fetchall()
         self.assertEqual(rows, [("kTCCServiceAppleEvents", "/bin/zsh", 1, 2, "com.apple.finder"),
                                 ("kTCCServiceAppleEvents", "/bin/zsh", 1, 2, "com.apple.systemevents")])
+
+    def test_its_parent_has_a_recent_screen_capture_approval(self):
+        with tempfile.TemporaryDirectory() as home:
+            db = Path(home, "Library/Application Support/com.apple.TCC/TCC.db")
+            db.parent.mkdir(parents=True)
+            with sqlite3.connect(db) as tccd:
+                tccd.execute(TCC_ACCESS)
+            grant = subprocess.run(["/bin/zsh", "-c", 'sh -c "$1"; exit $?', "zsh", vm.GUEST_AUTOMATION],
+                                   env={**os.environ, "HOME": home}, capture_output=True, text=True, timeout=30)
+            self.assertEqual(grant.returncode, 0, grant.stderr)
+            approvals = Path(home, "Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist")
+            entries = plistlib.loads(approvals.read_bytes())
+        self.assertEqual(list(entries), ["/bin/zsh"])
+        last_used = entries["/bin/zsh"]["kScreenCaptureApprovalLastUsed"].replace(tzinfo=datetime.timezone.utc)
+        self.assertLess(abs((datetime.datetime.now(datetime.timezone.utc) - last_used).total_seconds()), 60)
 
 
 if __name__ == "__main__":
