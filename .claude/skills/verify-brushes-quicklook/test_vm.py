@@ -211,7 +211,8 @@ esac
                 time.sleep(0.05)
             raise OSError("ps failed")
 
-        args = argparse.Namespace(vm=vm.vm_name("tahoe"), used=self.root / "used", idle=60, exec_limit=60)
+        args = argparse.Namespace(vm=vm.vm_name("tahoe"), used=self.root / "used", idle=60, exec_limit=60,
+                                  adopt=False)
         with mock.patch.dict(os.environ, self.env), mock.patch.object(vm, "run", ps_fails), \
                 self.assertRaises(OSError):
             vm.cmd_watch(args)

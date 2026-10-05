@@ -7,6 +7,7 @@ stdout like bql. `vm run` passes bql's own JSON and exit code through.
 
 import argparse
 import contextlib
+import fcntl
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -151,15 +152,17 @@ def cmd_up(args):
     used = mark_used(name)
     log = vm_dir(name) / "tart-run.log"
     started = time.time()
-    watcher = None
     if not already_running:
         note(f"booting {name}")
-        with log.open("w") as out:
-            watcher = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "watch", name, str(used),
-                                        str(IDLE_SECONDS), str(EXEC_SECONDS)], stdin=subprocess.DEVNULL, stdout=out,
-                                       stderr=subprocess.STDOUT, start_new_session=True)
+    # A VM that runs already, whose watcher got `kill -9` or that `tart run` started by hand, gets a watcher that adopts
+    # it. That watcher exits at once when the VM has one.
+    with log.open("a" if already_running else "w") as out:
+        watcher = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "watch", name, str(used),
+                                    str(IDLE_SECONDS), str(EXEC_SECONDS), *(["--adopt"] if already_running else [])],
+                                   stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                                   start_new_session=True)
     while time.time() - started < BOOT_TIMEOUT:
-        if watcher and watcher.poll() is not None:
+        if not already_running and watcher.poll() is not None:
             output = log.read_text().strip()
             emit({"ok": False, "vm": name, "log": str(log),
                   "running_vms": sorted(other["Name"] for other in vms() if other["State"] == "running"),
@@ -272,11 +275,25 @@ def tart_exec_pids(name):
 def cmd_watch(args):
     # Turns `kill` into an exception, so the `finally` below stops the VM.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM))
+    # The kernel releases the lock when the watcher dies, also on `kill -9`, so the next `vm up` adopts its VM.
+    lock = os.open(args.used.with_name("watch.lock"), os.O_WRONLY | os.O_CREAT)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | (fcntl.LOCK_NB if args.adopt else 0))
+    except BlockingIOError:
+        return
     last_used = time.time()
     first_seen = {}
-    tart = subprocess.Popen(["tart", "run", "--no-graphics", args.vm], stdin=subprocess.DEVNULL)
+    tart = None if args.adopt else subprocess.Popen(["tart", "run", "--no-graphics", args.vm],
+                                                    stdin=subprocess.DEVNULL)
+
+    def vm_running():
+        if tart:
+            return tart.poll() is None
+        vm = local_vm(args.vm)
+        return bool(vm) and vm["State"] == "running"
+
     try:
-        while tart.poll() is None:
+        while vm_running():
             now = time.time()
             first_seen = {pid: first_seen.get(pid, now) for pid in tart_exec_pids(args.vm)}
             last_used = max([last_used, *(min(now, seen + args.exec_limit) for seen in first_seen.values())])
@@ -287,16 +304,20 @@ def cmd_watch(args):
             if idle >= args.idle:
                 note(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} stopping {args.vm} after {round(idle)} s without use")
                 run(["tart", "stop", args.vm], timeout=120)
-            try:
-                tart.wait(timeout=min(POLL_SECONDS, args.idle))
-            except subprocess.TimeoutExpired:
-                pass
+            if tart:
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    tart.wait(timeout=min(POLL_SECONDS, args.idle))
+            else:
+                time.sleep(min(POLL_SECONDS, args.idle))
     finally:
         # Nothing else would stop the VM once its watcher is gone.
-        if tart.poll() is None:
+        if not tart:
+            run(["tart", "stop", args.vm], timeout=120)
+        elif tart.poll() is None:
             tart.kill()
             tart.wait()
-    sys.exit(tart.returncode)
+    if tart:
+        sys.exit(tart.returncode)
 
 
 def cmd_down(args):
@@ -333,6 +354,8 @@ def main():
     watch.add_argument("used", type=Path)
     watch.add_argument("idle", type=float)
     watch.add_argument("exec_limit", type=float)
+    watch.add_argument("--adopt", action="store_true",
+                       help="watch the VM that already runs instead of running it, unless another watcher has it")
     args = parser.parse_args()
     try:
         globals()[f"cmd_{args.command}"](args)

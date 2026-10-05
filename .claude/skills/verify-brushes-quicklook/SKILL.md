@@ -74,8 +74,9 @@ returns cannot hold the VM. The watcher checks every 2 seconds, so a `tart
 exec` that starts and ends between two checks does not count. The watcher
 logs the stop to `build.noindex/verify/vm/<vm>/tart-run.log`. Run `vm down`
 when verification ends, so the VM does not hold a VM slot for those 30
-minutes. `kill` on the watcher stops the VM too, but `kill -9` leaves it
-running until `vm down`. A VM started with `tart run` by hand has no watcher.
+minutes. `kill` on the watcher stops the VM too. `kill -9` on the watcher
+leaves the VM running without one, and so does `tart run` by hand. `vm up` on
+such a VM starts a watcher for it.
 
 `vm` keeps `bql`'s contract: one JSON object on stdout and exit codes 0, 1
 and 2. `vm run` prints the guest `bql`'s JSON and exits with its code. Paths
