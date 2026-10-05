@@ -107,9 +107,10 @@ your screen and audio", with the buttons Allow and Open System Settings. It
 covers the middle of full-screen captures that follow. `vm up` records a
 recent capture for the guest agent in
 `~/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist`
-before any capture, so the alert does not open. When a capture ran before `vm up`, for
-example on a VM booted with `tart run`, the alert can be open. Close it in the
-guest:
+before any capture, so the alert does not open. When a capture ran before
+`vm up`, for example on a VM booted with `tart run`, the alert can be open.
+Run `vm up` with the same `--image` first, because the click below is an
+Apple Event and needs the grant that `vm up` writes. Then close the alert:
 
 ```
 tart exec <vm> osascript -e 'tell application "System Events" to click button "Allow" of window 1 of process "UserNotificationCenter"'

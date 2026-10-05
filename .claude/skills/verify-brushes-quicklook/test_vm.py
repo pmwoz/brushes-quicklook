@@ -284,21 +284,22 @@ class GuestGrantsTest(unittest.TestCase):
         self.assertEqual(rows, [("kTCCServiceAppleEvents", "/bin/zsh", 1, 2, "com.apple.finder"),
                                 ("kTCCServiceAppleEvents", "/bin/zsh", 1, 2, "com.apple.systemevents")])
 
-    def test_its_parent_has_a_recent_screen_capture_approval(self):
+    def test_its_parent_gets_a_recent_screen_capture_approval_that_keeps_other_entries_when_tcc_fails(self):
         with tempfile.TemporaryDirectory() as home:
-            db = Path(home, "Library/Application Support/com.apple.TCC/TCC.db")
-            db.parent.mkdir(parents=True)
-            with sqlite3.connect(db) as tccd:
-                tccd.execute(TCC_ACCESS)
+            approvals = Path(home, "Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist")
+            approvals.parent.mkdir(parents=True)
+            old = datetime.datetime(2026, 1, 1)
+            approvals.write_bytes(plistlib.dumps({"/bin/zsh": {"kScreenCaptureAlertableUsageCount": 2},
+                                                  "/usr/bin/other": {"kScreenCaptureApprovalLastUsed": old}}))
+            # No TCC database exists, so the Automation grant fails after the approval is written.
             grant = subprocess.run(["/bin/zsh", "-c", 'sh -c "$1"; exit $?', "zsh", vm.GUEST_GRANTS],
                                    env={**os.environ, "HOME": home}, capture_output=True, text=True, timeout=30)
-            self.assertEqual(grant.returncode, 0, grant.stderr)
-            approvals = Path(home, "Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist")
+            self.assertNotEqual(grant.returncode, 0)
             entries = plistlib.loads(approvals.read_bytes())
-        self.assertEqual(list(entries), ["/bin/zsh"])
+        self.assertEqual(entries["/usr/bin/other"], {"kScreenCaptureApprovalLastUsed": old})
+        self.assertEqual(entries["/bin/zsh"]["kScreenCaptureAlertableUsageCount"], 2)
         last_used = entries["/bin/zsh"]["kScreenCaptureApprovalLastUsed"].replace(tzinfo=datetime.timezone.utc)
         self.assertLess(abs((datetime.datetime.now(datetime.timezone.utc) - last_used).total_seconds()), 60)
-
 
 if __name__ == "__main__":
     unittest.main()
