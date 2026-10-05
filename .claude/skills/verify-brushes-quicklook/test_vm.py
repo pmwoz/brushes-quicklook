@@ -77,14 +77,13 @@ esac
 
 
 class IdleStopTest(unittest.TestCase):
-    """Boots this checkout's Tahoe VM with a fake `tart` whose `run` lasts until `tart stop`, with a short idle time.
-
-    The fake `run` also ends when the test's temporary folder is gone, so a failed test leaves no process behind."""
-
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
+        repo = mock.patch.object(vm, "REPO", self.root)
+        repo.start()
+        self.addCleanup(repo.stop)
         self.stopped = self.root / "stopped"
         self.tart = self.root / "tart"
         listed = {state: json.dumps([{"Name": vm.vm_name("tahoe"), "State": state, "Source": "local"}])
@@ -94,7 +93,8 @@ case $1 in
     list) if [ -e "$FAKE_STOPPED.booted" ] && [ ! -e "$FAKE_STOPPED" ]; then printf '%s\\n' '{listed["running"]}'
           else printf '%s\\n' '{listed["stopped"]}'; fi ;;
     run) touch "$FAKE_STOPPED.booted"
-         while [ ! -e "$FAKE_STOPPED" ] && [ -d "${{FAKE_STOPPED%/*}}" ]; do sleep 0.1; done ;;
+         test_dir=${{FAKE_STOPPED%/*}}
+         while [ ! -e "$FAKE_STOPPED" ] && [ -d "$test_dir" ]; do sleep 0.1; done ;;
     exec) sleep "${{FAKE_EXEC_SECONDS:-0}}"; printf '{{}}' ;;
     stop) touch "$FAKE_STOPPED" ;;
 esac

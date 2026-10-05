@@ -65,6 +65,14 @@ vm evidence                       # copy the guest's evidence to build.noindex/v
 vm down                           # stop the VM
 ```
 
+`vm up` boots the VM under a watcher process that stops it after 30
+minutes without use, also when the agent that ran `vm up` has exited. Every
+`vm` command against the VM and every running `tart exec` into it, such as a
+host-app recipe, count as use. The watcher logs the stop to
+`build.noindex/verify/vm/<vm>/tart-run.log`. Run `vm down` when verification
+ends, so the VM does not hold a VM slot for those 30 minutes. A VM started
+with `tart run` by hand has no watcher.
+
 `vm` keeps `bql`'s contract: one JSON object on stdout and exit codes 0, 1
 and 2. `vm run` prints the guest `bql`'s JSON and exits with its code. Paths
 in that JSON are guest paths. Pass `--image` before the `bql` arguments, as in
@@ -245,5 +253,5 @@ extension processes by name. The only extension kill is the exact PID that
 `bql` and `vm` are the only helpers: Python 3 standard library only, no
 dependencies. `bql` calls `qlmanage`, `screencapture`, `osascript`, `codesign`,
 `pluginkit`, `lsregister` and `log`. `vm` calls `tart`, `tar`, `git`,
-`xcodegen` and `xcodebuild` on the host. `bql <subcommand> --help` and
+`ps`, `xcodegen` and `xcodebuild` on the host. `bql <subcommand> --help` and
 `vm <subcommand> --help` show every flag.

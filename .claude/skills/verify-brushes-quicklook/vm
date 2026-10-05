@@ -29,6 +29,8 @@ IMAGES = {"tahoe": "ghcr.io/cirruslabs/macos-tahoe-base:latest",
           "sonoma": "ghcr.io/cirruslabs/macos-sonoma-base:latest"}
 GUEST_REPO = "/Users/admin/brushes-quicklook"
 BOOT_TIMEOUT = 180
+IDLE_SECONDS = 1800
+POLL_SECONDS = 10
 LIMIT_ERROR = "exceeds the system limit"
 LIMIT_FIX = ("Apple allows two running macOS VMs on a host. Stop one you own with `tart stop <name>` and rerun "
              "`vm up --image {image}`. Leave VMs of other sessions running.")
@@ -83,6 +85,13 @@ def vm_dir(name):
     return WORK / "vm" / name
 
 
+def mark_used(name):
+    used = vm_dir(name) / "used"
+    used.parent.mkdir(parents=True, exist_ok=True)
+    used.touch()
+    return used
+
+
 def vms():
     return json.loads(run(["tart", "list", "--format", "json"], check=True).stdout)
 
@@ -97,6 +106,7 @@ def running(image):
     if not vm or vm["State"] != "running":
         raise Fail(f"VM {name} is {vm['State'] if vm else 'missing'}",
                    f"Run `vm up --image {image}`." if vm else f"Run `vm setup --image {image}`, then `vm up --image {image}`.")
+    mark_used(name)
     return name
 
 
@@ -125,19 +135,21 @@ def cmd_up(args):
     already_running = vm["State"] == "running"
     log = vm_dir(name) / "tart-run.log"
     log.parent.mkdir(parents=True, exist_ok=True)
+    used = mark_used(name)
     started = time.time()
-    tart = None
+    watcher = None
     if not already_running:
         note(f"booting {name}")
         with log.open("w") as out:
-            tart = subprocess.Popen(["tart", "run", "--no-graphics", name], stdin=subprocess.DEVNULL, stdout=out,
-                                    stderr=subprocess.STDOUT, start_new_session=True)
+            watcher = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "watch", name, str(used),
+                                        str(IDLE_SECONDS)], stdin=subprocess.DEVNULL, stdout=out,
+                                       stderr=subprocess.STDOUT, start_new_session=True)
     while time.time() - started < BOOT_TIMEOUT:
-        if tart and tart.poll() is not None:
+        if watcher and watcher.poll() is not None:
             output = log.read_text().strip()
             emit({"ok": False, "vm": name, "log": str(log),
                   "running_vms": sorted(other["Name"] for other in vms() if other["State"] == "running"),
-                  "error": f"tart run exited {tart.returncode}: {output}",
+                  "error": f"tart run exited {watcher.returncode}: {output}",
                   "fix": LIMIT_FIX.format(image=args.image) if LIMIT_ERROR in output else f"Read {log}."}, 1)
         if guest_ready(name):
             break
@@ -232,6 +244,27 @@ def cmd_evidence(args):
     emit({"ok": True, "vm": name, "evidence_dir": str(target / "evidence"), "runs": runs})
 
 
+def used_by_tart_exec(name):
+    pattern = re.compile(rf"(^|/)tart exec( -\S+)* {re.escape(name)}( |$)")
+    return any(pattern.search(line) for line in run(["ps", "-axo", "command="]).stdout.splitlines())
+
+
+def cmd_watch(args):
+    tart = subprocess.Popen(["tart", "run", "--no-graphics", args.vm], stdin=subprocess.DEVNULL)
+    while tart.poll() is None:
+        if used_by_tart_exec(args.vm):
+            args.used.touch()
+        idle = time.time() - args.used.stat().st_mtime
+        if idle >= args.idle:
+            note(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} stopping {args.vm} after {round(idle)} s without use")
+            run(["tart", "stop", args.vm], timeout=120)
+        try:
+            tart.wait(timeout=min(POLL_SECONDS, args.idle))
+        except subprocess.TimeoutExpired:
+            pass
+    sys.exit(tart.returncode)
+
+
 def cmd_down(args):
     name = vm_name(args.image)
     vm = local_vm(name)
@@ -260,6 +293,11 @@ def main():
         command.add_argument("--image", choices=sorted(IMAGES), default="tahoe", help="guest macOS (default tahoe)")
         if name == "run":
             command.add_argument("bql", nargs=argparse.REMAINDER, help="bql subcommand and its arguments")
+    watch = sub.add_parser("watch", help="started by `vm up`: run the VM and stop it once no `vm` command or "
+                                         "`tart exec` used it for the idle time")
+    watch.add_argument("vm")
+    watch.add_argument("used", type=Path)
+    watch.add_argument("idle", type=float)
     args = parser.parse_args()
     try:
         globals()[f"cmd_{args.command}"](args)
