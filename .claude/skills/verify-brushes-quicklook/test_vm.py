@@ -76,6 +76,69 @@ esac
         self.assertIn("without bql's JSON", result["error"])
 
 
+class IdleStopTest(unittest.TestCase):
+    """Boots this checkout's Tahoe VM with a fake `tart` whose `run` lasts until `tart stop`, with a short idle time.
+
+    The fake `run` also ends when the test's temporary folder is gone, so a failed test leaves no process behind."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.stopped = self.root / "stopped"
+        self.tart = self.root / "tart"
+        listed = {state: json.dumps([{"Name": vm.vm_name("tahoe"), "State": state, "Source": "local"}])
+                  for state in ("running", "stopped")}
+        self.tart.write_text(f"""#!/bin/sh
+case $1 in
+    list) if [ -e "$FAKE_STOPPED.booted" ] && [ ! -e "$FAKE_STOPPED" ]; then printf '%s\\n' '{listed["running"]}'
+          else printf '%s\\n' '{listed["stopped"]}'; fi ;;
+    run) touch "$FAKE_STOPPED.booted"
+         while [ ! -e "$FAKE_STOPPED" ] && [ -d "${{FAKE_STOPPED%/*}}" ]; do sleep 0.1; done ;;
+    exec) sleep "${{FAKE_EXEC_SECONDS:-0}}"; printf '{{}}' ;;
+    stop) touch "$FAKE_STOPPED" ;;
+esac
+""")
+        self.tart.chmod(0o755)
+        self.env = {**os.environ, "PATH": f"{tmp.name}:{os.environ['PATH']}", "FAKE_STOPPED": str(self.stopped)}
+
+    def vm(self, idle, *argv):
+        with mock.patch.dict(os.environ, self.env), mock.patch.dict(vm.__dict__, {"IDLE_SECONDS": idle}), \
+                mock.patch.object(vm, "WORK", self.root / "work"), mock.patch.object(sys, "argv", ["vm", *argv]), \
+                redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()), \
+                self.assertRaises(SystemExit) as exit:
+            vm.main()
+        self.assertEqual(exit.exception.code, 0, stdout.getvalue())
+
+    def stop_time(self):
+        deadline = time.time() + 20
+        while not self.stopped.exists():
+            self.assertLess(time.time(), deadline, "the VM still runs 20 s after its idle time")
+            time.sleep(0.1)
+        return self.stopped.stat().st_mtime
+
+    def test_a_vm_that_nothing_uses_stops_by_itself_after_vm_up_returned(self):
+        booted = time.time()
+        self.vm(1, "up")
+        self.assertGreaterEqual(self.stop_time() - booted, 1)
+        log = (self.root / "work/vm" / vm.vm_name("tahoe") / "tart-run.log").read_text()
+        self.assertIn("without use", log)
+
+    def test_every_vm_command_starts_the_idle_time_again(self):
+        self.vm(2, "up")
+        time.sleep(1.5)
+        used = time.time()
+        self.vm(2, "run", "doctor")
+        self.assertGreaterEqual(self.stop_time() - used, 2)
+
+    def test_a_live_tart_exec_into_the_vm_keeps_it_running(self):
+        self.vm(1, "up")
+        started = time.time()
+        subprocess.Popen([str(self.tart), "exec", vm.vm_name("tahoe"), "sh"],
+                         env={**self.env, "FAKE_EXEC_SECONDS": "3"}).wait()
+        self.assertGreaterEqual(self.stop_time() - started, 3)
+
+
 class GuestSyncTest(unittest.TestCase):
     """Runs the guest half of `vm sync` on this Mac against a temporary guest checkout."""
 
