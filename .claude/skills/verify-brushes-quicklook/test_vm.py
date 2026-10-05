@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -103,13 +104,20 @@ esac
         self.tart.chmod(0o755)
         self.env = {**os.environ, "PATH": f"{tmp.name}:{os.environ['PATH']}", "FAKE_STOPPED": str(self.stopped)}
 
-    def vm(self, idle, *argv):
+    def vm(self, idle, *argv, exec_limit=60):
         with mock.patch.dict(os.environ, self.env), mock.patch.object(vm, "IDLE_SECONDS", idle), \
+                mock.patch.object(vm, "EXEC_SECONDS", exec_limit), \
                 mock.patch.object(vm, "WORK", self.root / "work"), mock.patch.object(sys, "argv", ["vm", *argv]), \
                 redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()), \
                 self.assertRaises(SystemExit) as exit:
             vm.main()
         self.assertEqual(exit.exception.code, 0, stdout.getvalue())
+
+    def tart_run_pid(self):
+        booted = Path(f"{self.stopped}.booted")
+        while not booted.exists():
+            time.sleep(0.05)
+        return int(booted.read_text())
 
     def stop_time(self):
         deadline = time.time() + 20
@@ -148,6 +156,39 @@ esac
         subprocess.run(["tart", "exec", vm.vm_name("tahoe")], executable="/bin/sh", cwd=self.root, check=True)
         self.assertGreaterEqual(self.stop_time() - started, 3)
 
+    def test_a_tart_exec_that_never_returns_stops_counting_as_use(self):
+        self.vm(1, "up", exec_limit=2)
+        (self.root / "exec").write_text("sleep 30\n")
+        started = time.time()
+        hung = subprocess.Popen(["tart", "exec", vm.vm_name("tahoe")], executable="/bin/sh", cwd=self.root)
+        self.addCleanup(hung.wait)
+        self.addCleanup(hung.kill)
+        self.assertGreaterEqual(self.stop_time() - started, 3)
+        self.assertIsNone(hung.poll())
+
+    def test_a_vm_sync_keeps_the_vm_up_through_a_host_build_longer_than_the_idle_time(self):
+        build = self.root / "build.noindex/Build/Products/Release/BrushesQuickLook.app"
+        build.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        self.vm(3, "up")
+        self.tart_run_pid()
+        with mock.patch.object(vm, "HOST_BUILD", [["sh", "-c", 'sleep 6; test ! -e "$FAKE_STOPPED"']]), \
+                mock.patch.object(vm, "BUILD", build), mock.patch.object(vm.bql, "LSREGISTER", "true"):
+            self.vm(3, "sync")
+        synced = time.time()
+        self.assertLess(self.stop_time() - synced, 10)
+
+    def test_a_watcher_stopped_with_sigterm_ends_the_vm_it_runs(self):
+        self.vm(60, "up")
+        tart = self.tart_run_pid()
+        watcher = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(tart)], capture_output=True, text=True,
+                                     check=True).stdout)
+        os.kill(watcher, signal.SIGTERM)
+        deadline = time.time() + 10
+        while subprocess.run(["ps", "-p", str(tart)], capture_output=True).returncode == 0:
+            self.assertLess(time.time(), deadline, "tart run still runs 10 s after its watcher got SIGTERM")
+            time.sleep(0.1)
+
     def test_a_watcher_that_fails_ends_the_vm_it_runs(self):
         booted = Path(f"{self.stopped}.booted")
 
@@ -156,7 +197,7 @@ esac
                 time.sleep(0.05)
             raise OSError("ps failed")
 
-        args = argparse.Namespace(vm=vm.vm_name("tahoe"), used=self.root / "used", idle=60)
+        args = argparse.Namespace(vm=vm.vm_name("tahoe"), used=self.root / "used", idle=60, exec_limit=60)
         with mock.patch.dict(os.environ, self.env), mock.patch.object(vm, "run", ps_fails), \
                 self.assertRaises(OSError):
             vm.cmd_watch(args)
