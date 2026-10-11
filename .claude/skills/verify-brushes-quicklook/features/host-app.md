@@ -35,8 +35,8 @@ Preconditions:
 - **Install and open.** Run `bql install`. The JSON lists the steps
   `build, check-build, unregister N stale paths, quit, replace, register, verify` and
   the setup window opens.
-- **Registration.** Run `bql doctor`. `pluginkit-preview` and
-  `pluginkit-thumbnail` are `ok` with one `+` line each, ending in the
+- **Registration.** Run `bql doctor`. It exits 0, and `observed.plugins` holds
+  one `+` line for each extension, ending in the
   `/Applications/.../PlugIns/*.appex` path.
 - **Window ids.** List the app's windows with
   `osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID))).filter(w => w.kCGWindowOwnerName === "BrushesQuickLook" && w.kCGWindowLayer === 0).map(w => [w.kCGWindowNumber, w.kCGWindowName]))'`.
@@ -117,7 +117,6 @@ Preconditions:
 
 ## Gotchas
 
-- `bql install --dry-run` changes nothing. Use it to see which stale copies would be unregistered.
 - `bql install` replaces the only registered copy on this Mac. Another
   session's verification is lost. Check `bql doctor` first.
 - `bql cleanup` quits the app only when `bql install` opened it.

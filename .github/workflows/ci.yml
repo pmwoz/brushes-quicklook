@@ -44,7 +44,7 @@ jobs:
       - name: Check Release app
         run: .claude/skills/verify-brushes-quicklook/bql check-build build.noindex/Build/Products/Release/BrushesQuickLook.app
       - name: Install app
-        run: .claude/skills/verify-brushes-quicklook/bql install
+        run: .claude/skills/verify-brushes-quicklook/bql install --no-build
       - name: Copy fixtures
         run: .claude/skills/verify-brushes-quicklook/bql fixtures
       - name: Hostile sweep

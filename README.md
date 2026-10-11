@@ -91,15 +91,18 @@ After the Release build, CI checks the app with
 `.claude/skills/verify-brushes-quicklook/bql check-build <app>`. CI runs the
 same steps on GitHub's `macos-26` image.
 
-Run `scripts/install.sh` to build and check Release, replace
-`/Applications/BrushesQuickLook.app`, and register the app and both extensions.
-It first unregisters every other copy of the app that LaunchServices knows,
-including the one `xcodebuild` registers for its own build product, so System
-Settings lists the app once. It asks the running app to quit and fails if the
-app is still running 10 s later. Build products live in `build.noindex`, which
-Spotlight skips, so an unregistered build is not registered again by indexing.
-Registering the app ends its running extension processes, and the script fails
-if a live extension process still runs a binary other than the installed one.
+Run `.claude/skills/verify-brushes-quicklook/bql install` to build and check
+Release, replace `/Applications/BrushesQuickLook.app`, and register the app and
+both extensions. It first unregisters every other copy of the app that
+LaunchServices knows, including the one `xcodebuild` registers for its own
+build product, so System Settings lists the app once. It asks the running app
+to quit and fails if the app is still running 10 s later. Build products live
+in `build.noindex`, which Spotlight skips, so an unregistered build is not
+registered again by indexing. Registering the app ends its running extension
+processes. Last, it runs the checks of `bql doctor` and fails on any problem,
+for example a live extension process that still runs a binary other than the
+installed one. `bql install --main` builds `origin/main` in a temporary
+worktree and installs that instead.
 
 Tests:
 
@@ -122,7 +125,7 @@ xcodebuild -project BrushesQuickLook.xcodeproj -scheme BrushesPreviewTests -deri
 ## Installing a release
 
 There is no release yet. Issue #6 tracks the signed and notarized DMG. Until
-then, build and install from source with `scripts/install.sh`, described under
+then, build and install from source with `bql install`, described under
 Building. If Finder still shows generic icons, enable the extensions under
 System Settings > General > Login Items & Extensions > Quick Look. On macOS 14
 they are under System Settings > Privacy & Security > Extensions > Quick Look.

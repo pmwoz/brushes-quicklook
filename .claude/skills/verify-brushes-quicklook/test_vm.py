@@ -211,7 +211,8 @@ esac
         self.vm(3, "up")
         self.tart_run_pid()
         with mock.patch.object(vm, "HOST_BUILD", [["sh", "-c", 'sleep 6; test ! -e "$FAKE_STOPPED"']]), \
-                mock.patch.object(vm, "BUILD", build), mock.patch.object(vm.bql, "LSREGISTER", "true"):
+                mock.patch.object(vm, "BUILD", build), mock.patch.object(vm.bql, "LSREGISTER", "true"), \
+                mock.patch.object(vm.bql, "cdhash", lambda path: "cdhash"):
             self.vm(3, "sync")
         synced = time.time()
         self.assertLess(self.stop_time() - synced, 10)

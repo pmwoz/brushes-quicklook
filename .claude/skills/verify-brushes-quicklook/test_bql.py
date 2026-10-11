@@ -1,4 +1,7 @@
 import ast
+import ctypes
+import dataclasses
+import errno
 import importlib.machinery
 import importlib.util
 import io
@@ -8,12 +11,14 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Dict, Set, Tuple
 from unittest import mock
 
 loader = importlib.machinery.SourceFileLoader("bql", str(Path(__file__).with_name("bql")))
@@ -204,18 +209,19 @@ class ExitContractTest(unittest.TestCase):
     def doctor(self, installed=True, built=True, mismatched=None, unregistered=None, other_copy=False, previews=None,
                apps=None):
         """previews and apps map a BrushesPreview or BrushesQuickLook pid to (root, codesign -v error or None, alive).
-        root is "app", "build", "other" or None for a process that exited."""
+        root is "app", "build", "renamed" or None for a process that exited."""
         executables = {"BrushesPreview": "Contents/PlugIns/BrushesPreview.appex/Contents/MacOS/BrushesPreview",
                        "BrushesQuickLook": "Contents/MacOS/BrushesQuickLook"}
         processes = {"BrushesPreview": previews or {}, "BrushesQuickLook": apps or {}}
         owner = {pid: name for name, pids in processes.items() for pid in pids}
         states = {pid: state for pids in processes.values() for pid, state in pids.items()}
-        base = Path(tempfile.mkdtemp(dir=self.dir))
+        base = Path(os.path.realpath(tempfile.mkdtemp(dir=self.dir)))
         app, build = base / "installed/BrushesQuickLook.app", base / "build/BrushesQuickLook.app"
-        for bundle, exists in ((app, installed), (build, built)):
+        roots = {"app": app, "build": build, "renamed": base / "Renamed.app"}
+        for bundle, exists in ((app, installed), (build, built), (roots["renamed"], True)):
             if exists:
-                (bundle / "Contents/MacOS").mkdir(parents=True)
-                (bundle / "Contents/MacOS/BrushesQuickLook").write_bytes(b"")
+                FakeMac.write_bundle(bundle, "")
+        table = {int(pid): f"{roots[state[0]]}/{executables[owner[pid]]}" for pid, state in states.items() if state[0]}
         (base / "project.yml").write_text("")
         os.utime(base / "project.yml", (0, 0))
         hashes = {str(path): f"{kind} cdhash" for bundle in (app, build) for kind, path in bql.bundles(bundle).items()}
@@ -226,24 +232,18 @@ class ExitContractTest(unittest.TestCase):
             if args[0] == "pluginkit":
                 kind = args[-1].rsplit(".", 1)[1]
                 line = f"+    {args[-1]}(1.0)\t{bql.bundles(app)[kind]}\n"
-                return SimpleNamespace(stdout="" if kind == unregistered else line)
+                return SimpleNamespace(returncode=0, stdout="" if kind == unregistered else line)
             if args[0] == "git":
-                return SimpleNamespace(stdout="project.yml\n")
-            if args[0] == "pgrep":
-                return SimpleNamespace(stdout="\n".join(processes.get(args[-1], {})))
-            if args[0] == "ps":
-                root = {"app": app, "build": build, "other": base / "Other.app"}.get(states[args[-1]][0])
-                return SimpleNamespace(stdout=f"{root}/{executables[owner[args[-1]]]}\n" if root else "")
+                return SimpleNamespace(returncode=0, stdout="project.yml\n")
             if args[0] == "codesign":
                 error = states[args[-1]][1]
                 return SimpleNamespace(returncode=1 if error else 0, stderr=f"{error}\n" if error else "")
-            if args[0] == "kill":
-                return SimpleNamespace(returncode=0 if states[args[-1]][2] else 1)
             if args[0] == bql.LSREGISTER:
                 copies = [app, base / "Other/BrushesQuickLook.app"] if other_copy else [app]
-                return SimpleNamespace(stdout="".join(f"    path:    {copy} (0x1)\n" for copy in copies))
+                return SimpleNamespace(returncode=0, stdout="".join(map(ls_record, copies)))
             return SimpleNamespace(stdout="")
-        return {"REPO": base, "APP": app, "BUILD": build, "run": run, "cdhash": lambda path: hashes[str(path)]}
+        return {"REPO": base, "APP": app, "BUILD": build, "run": run, "cdhash": lambda path: hashes[str(path)],
+                "alive": lambda pid: states[str(pid)][2], "LIBPROC": FakeLibproc(lambda: table)}
 
     def test_every_failed_check_exits_1_with_error_and_fix(self):
         brush, settle = str(self.brush), ("--settle", "0")
@@ -281,12 +281,13 @@ class ExitContractTest(unittest.TestCase):
              {**drives, "wait_for_new_crashes": quiet, "open_in_app": app_windows("no window")}),
             (hostile, "above the limit of 1",
              {**drives, "wait_for_new_crashes": quiet, "drive_previews": previews(attempts=2)}),
-            (("doctor",), "installed failed", self.doctor(installed=False)),
-            (("doctor",), "release-build failed", self.doctor(built=False)),
+            (("doctor",), "installed: ", self.doctor(installed=False)),
+            (("doctor",), "release-build: ", self.doctor(built=False)),
+            (("doctor",), "launchservices: other copies are registered", self.doctor(other_copy=True)),
         ]
-        rows += [(("doctor",), f"cdhash-{kind} failed", self.doctor(mismatched=kind))
+        rows += [(("doctor",), f"cdhash-{kind}: ", self.doctor(mismatched=kind))
                  for kind in ("app", "preview", "thumbnail")]
-        rows += [(("doctor",), f"pluginkit-{kind} failed", self.doctor(unregistered=kind)) for kind in bql.PLUGINS]
+        rows += [(("doctor",), f"pluginkit-{kind}: ", self.doctor(unregistered=kind)) for kind in bql.PLUGINS]
         fragments = {error for _, error, _ in rows}
         for argv, error, stubs in rows:
             with self.subTest(command=argv[0], error=error):
@@ -317,33 +318,27 @@ class ExitContractTest(unittest.TestCase):
                 code, result = run_bql(*argv, **self.stubs, **stubs)
                 self.assertEqual((code, result["ok"], "error" in result, "fix" in result), (0, True, False, False))
 
-    def test_a_doctor_run_with_no_failed_check_exits_0(self):
-        for other_copy, not_ok in ((False, {}), (True, {"launchservices": "warn"})):
-            with self.subTest(other_copy=other_copy):
-                code, result = run_bql("doctor", **self.doctor(other_copy=other_copy))
-                self.assertEqual((code, result["ok"], "error" in result, "fix" in result), (0, True, False, False))
-                self.assertEqual({c["check"]: c["status"] for c in result["checks"] if c["status"] != "ok"}, not_ok)
+    def test_a_doctor_run_with_no_problem_exits_0(self):
+        code, result = run_bql("doctor", **self.doctor(previews={"101": ("app", None, True)},
+                                                        apps={"201": ("app", None, True)}))
+        self.assertEqual((code, result["ok"], "error" in result, "fix" in result), (0, True, False, False))
 
-    def test_doctor_warns_on_a_live_extension_process_not_running_the_installed_code(self):
+    def test_doctor_fails_on_a_live_extension_process_not_running_the_installed_code(self):
         replaced = "102: the code on disk does not match what is running"
         previews = {"101": ("app", None, True), "102": ("app", replaced, True), "103": ("build", None, True),
-                    "104": ("other", None, True), "105": (None, None, False),
-                    "106": ("app", "106: No such process", False)}
+                    "104": ("renamed", None, True), "105": (None, None, False),
+                    "106": ("app", "106: No such process", False), "107": ("renamed", "107: No such process", False)}
         code, result = run_bql("doctor", **self.doctor(previews=previews))
-        running = {c["detail"]["pid"]: (c["status"], c["detail"]["verify"])
-                   for c in result["checks"] if c["check"] == "running-preview"}
-        self.assertEqual((code, running), (0, {101: ("ok", None), 102: ("warn", replaced), 103: ("warn", None),
-                                               106: ("ok", None)}))
+        observed = {p["pid"]: p["verify_error"] for p in result["observed"]["processes"]}
+        self.assertEqual((code, observed), (1, {101: None, 102: replaced, 103: None, 104: None}))
+        self.assertEqual(re.findall(r"running-preview: pid (\d+)", result["error"]), ["102", "103", "104"])
 
-    def test_doctor_warns_on_the_installed_host_app_running_replaced_code_and_ignores_other_copies(self):
+    def test_doctor_fails_on_the_installed_host_app_running_replaced_code_and_ignores_other_copies(self):
         replaced = "202: the code on disk does not match what is running"
         apps = {"201": ("app", None, True), "202": ("app", replaced, True), "203": ("build", None, True)}
         code, result = run_bql("doctor", **self.doctor(apps=apps))
-        running = {c["detail"]["pid"]: (c["status"], c.get("fix")) for c in result["checks"]
-                   if c["check"] == "running-app"}
-        self.assertEqual((code, {pid: status for pid, (status, _) in running.items()}),
-                         (0, {201: "ok", 202: "warn"}))
-        self.assertIn("kill 202", running[202][1])
+        self.assertEqual((code, re.findall(r"running-app: pid (\d+)", result["error"])), (1, ["202"]))
+        self.assertIn("Run `kill 202`", result["fix"])
 
     def test_a_missing_file_exits_2_with_error_and_fix(self):
         code, result = run_bql("thumb", self.dir / "missing.abr")
@@ -464,6 +459,683 @@ class HungOsascriptTest(unittest.TestCase):
     def test_a_hung_script_that_sends_no_apple_event_stays_an_unexpected_error(self):
         with mock.patch.object(bql, "run", self.hang), self.assertRaises(bql.subprocess.TimeoutExpired):
             bql.osascript(bql.WINDOWS_JS, language="JavaScript")
+
+
+class ProcessTableTest(unittest.TestCase):
+    def test_the_kernel_names_each_process_by_the_file_it_executed_whatever_started_it(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        (tmp / "alias").symlink_to("/bin", target_is_directory=True)
+        starts = [{"args": [str(tmp / "alias/sleep"), "30"]}, {"args": ["./sleep", "30"], "cwd": tmp / "alias"},
+                  {"args": [str(bql.APP / bql.EXECUTABLES["app"]), "30"], "executable": "/bin/sleep"}]
+        started = []
+        for start in starts:
+            proc = subprocess.Popen(**start)
+            self.addCleanup(proc.wait)
+            self.addCleanup(proc.kill)
+            started.append(proc)
+        table = bql.process_table()
+        self.assertEqual([table.get(proc.pid) for proc in started], [("sleep", "/bin/sleep")] * len(starts))
+
+
+APP = "/Applications/BrushesQuickLook.app"
+RELEASE = "/Users/me/brushes-quicklook/build.noindex/Build/Products/Release/BrushesQuickLook.app"
+DEBUG = "/Users/me/Library/Developer/Xcode/DerivedData/BrushesQuickLook-abc/Build/Products/Debug/BrushesQuickLook.app"
+REPLACED = "the code on disk does not match what is running"
+
+
+def ls_record(path, identifier=bql.BUNDLE_ID):
+    return (f"{'-' * 80}\nbundle id:                  BrushesQuickLook (0x1)\n"
+            f"path:                       {path} (0x2)\nidentifier:                 {identifier}\n")
+
+
+def process(kind, pid, app=APP, verify_error=None):
+    return bql.Process(kind, pid, f"{app}/{bql.EXECUTABLES[kind]}", app != APP, verify_error)
+
+
+def observed(**changes):
+    hashes = {"app": "a1", "preview": "b2", "thumbnail": "c3"}
+    plugins = {kind: [bql.Plugin("+", f"{APP}/Contents/PlugIns/{name}.appex")] for kind, name in bql.PLUGINS.items()}
+    clean = bql.Observed(app=APP, build=RELEASE, installed=dict(hashes), built=dict(hashes), registered=[APP],
+                         plugins=plugins,
+                         processes=[process("app", 201), process("preview", 101), process("thumbnail", 111)])
+    return dataclasses.replace(clean, **changes)
+
+
+class ReadinessTest(unittest.TestCase):
+    def test_each_fixture_yields_exactly_its_problems(self):
+        f3 = [process("app", 201), process("preview", 102, verify_error=f"102: {REPLACED}"), process("thumbnail", 111)]
+        f5 = [process("app", 202, verify_error=f"202: {REPLACED}"), process("preview", 101), process("thumbnail", 111)]
+        silent = [process("app", 201), process("preview", 102, verify_error=""), process("thumbnail", 111)]
+        rows = [
+            ("F1 a clean install", observed(), []),
+            ("F2 a second registered copy", observed(registered=[APP, RELEASE]),
+             [("launchservices", f"other copies are registered: {RELEASE}", "Run `bql install`.")]),
+            ("F3 a live preview process whose binary was replaced", observed(processes=f3),
+             [("running-preview", f"pid 102 runs {APP}/{bql.EXECUTABLES['preview']}: 102: {REPLACED}",
+               "Run `kill 102`.")]),
+            ("F5 the installed host app whose binary was replaced", observed(processes=f5),
+             [("running-app", f"pid 202 runs {APP}/{bql.EXECUTABLES['app']}: 202: {REPLACED}",
+               f"Run `kill 202`, then `open {APP}`.")]),
+            ("a live process that failed verification without a message", observed(processes=silent),
+             [("running-preview", f"pid 102 runs {APP}/{bql.EXECUTABLES['preview']}: ", "Run `kill 102`.")]),
+            ("a live preview process of another copy", observed(processes=[process("preview", 103, app=RELEASE)]),
+             [("running-preview", f"pid 103 runs {RELEASE}/{bql.EXECUTABLES['preview']}", "Run `kill 103`.")]),
+        ]
+        for fixture_name, fixture, expected in rows:
+            with self.subTest(fixture_name):
+                problems = bql.readiness(fixture)
+                self.assertEqual([problem[:2] for problem in problems], [row[:2] for row in expected])
+                self.assertEqual([row[2] in problem[2] for problem, row in zip(problems, expected)],
+                                 [True] * len(expected))
+
+
+class FakeLibproc:
+    def __init__(self, table):
+        caller = {os.getpid(): sys.executable}
+        self.table = lambda: {**caller, **table()}
+        self.errors: Dict[str, int] = {}
+        self.executed_names: Dict[int, str] = {}
+        self.exited: Set[int] = set()
+
+    def failed(self, call):
+        if call in self.errors:
+            ctypes.set_errno(self.errors[call])
+            return True
+        return False
+
+    def proc_listpids(self, kind, uid, buffer, size):
+        if (kind, uid) != (bql.PROC_RUID_ONLY, os.getuid()):
+            raise AssertionError(f"proc_listpids lists {kind} {uid}, not the processes of the current user")
+        if self.failed("proc_listpids"):
+            return 0
+        pids = [*self.table(), *sorted(self.exited)][:size // ctypes.sizeof(ctypes.c_int)]
+        buffer[:len(pids)] = pids
+        return len(pids) * ctypes.sizeof(ctypes.c_int)
+
+    def proc_name(self, pid, buffer, size):
+        if self.failed(f"proc_name {pid}"):
+            return 0
+        if pid not in self.table():
+            ctypes.set_errno(errno.ESRCH)
+            return 0
+        buffer.value = os.fsencode(self.executed_names.get(pid) or Path(os.path.realpath(self.table()[pid])).name)
+        return len(buffer.value)
+
+    def proc_pidpath(self, pid, buffer, size):
+        if self.failed(f"proc_pidpath {pid}"):
+            return 0
+        if pid not in self.table():
+            ctypes.set_errno(errno.ESRCH)
+            return 0
+        path = os.path.realpath(self.table()[pid])
+        if not os.path.exists(path):
+            ctypes.set_errno(errno.ENOENT)
+            return 0
+        buffer.value = os.fsencode(path)
+        return len(buffer.value)
+
+
+class FakeMac:
+    def __init__(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.cleanup = tmp.cleanup
+        self.root = Path(os.path.realpath(tmp.name))
+        self.app = self.root / "Applications/BrushesQuickLook.app"
+        self.repo = self.root / "repo"
+        self.build = self.repo / "build.noindex/Build/Products/Release/BrushesQuickLook.app"
+        self.registered, self.other_records = set(), []
+        self.plugins, self.elected, self.plugin_suffix = {kind: [] for kind in bql.PLUGINS}, set(), ""
+        self.processes, self.replaced, self.replaced_while_running = {}, {}, []
+        self.libproc = FakeLibproc(lambda: self.processes)
+        self.failures: Dict[Tuple[str, ...], Tuple[int, str, str]] = {}
+        self.hangs: Set[Tuple[str, ...]] = set()
+        self.missing: Set[Tuple[str, ...]] = set()
+        self.worktrees, self.add_fails = set(), None
+        self.quits, self.build_fails, self.build_deletes, self.build_problems = True, False, False, []
+        self.commands, self.now = [], [0.0]
+        self.repo.mkdir()
+        (self.repo / "project.yml").write_text("")
+
+    @staticmethod
+    def write_bundle(app, binary):
+        for kind, executable in bql.EXECUTABLES.items():
+            (app / executable).parent.mkdir(parents=True, exist_ok=True)
+            (app / executable).write_text(f"{binary}_{kind}")
+            identifier = bql.BUNDLE_ID if kind == "app" else f"{bql.BUNDLE_ID}.{kind}"
+            (app / executable).parents[1].joinpath("Info.plist").write_bytes(
+                plistlib.dumps({"CFBundleIdentifier": identifier}))
+
+    def ready(self):
+        self.write_bundle(self.app, "main")
+        self.write_bundle(self.build, "main")
+        self.registered = {str(self.app)}
+        self.plugins = {kind: [f"{self.app}/Contents/PlugIns/{name}.appex"] for kind, name in bql.PLUGINS.items()}
+        self.elected = set(bql.PLUGINS)
+        self.processes = {201: f"{self.app}/{bql.EXECUTABLES['app']}",
+                          101: f"{self.app}/{bql.EXECUTABLES['preview']}"}
+
+    def alias(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.root / "Applications", target_is_directory=True)
+        return alias / "BrushesQuickLook.app"
+
+    def rename_app(self):
+        renamed = self.app.with_name("Renamed.app")
+        self.app.rename(renamed)
+        self.app.symlink_to(renamed, target_is_directory=True)
+        return renamed
+
+    def alias_executable(self):
+        executable = self.app / bql.EXECUTABLES["app"]
+        executable.rename(executable.with_name("ActualApp"))
+        executable.symlink_to("ActualApp")
+        return executable.with_name("ActualApp")
+
+    def delete_copy(self, pid, kind):
+        copy = self.root / "tmp/Renamed.app"
+        self.write_bundle(copy, "copy")
+        self.processes[pid] = f"{copy}/{bql.EXECUTABLES[kind]}"
+        shutil.rmtree(copy)
+
+    def swap_bundle(self, pid, kind):
+        old = self.root / "tmp/Old.app"
+        old.parent.mkdir(exist_ok=True)
+        self.app.rename(old)
+        shutil.copytree(old, self.app)
+        # proc_pidpath follows the rename, so pid reports Old.app until it is deleted, then ENOENT.
+        self.processes[pid] = f"{old}/{bql.EXECUTABLES[kind]}"
+        shutil.rmtree(old)
+
+    def hard_link(self, pid, kind):
+        return self.keep_old_executable(pid, kind, self.root / f"old-{kind}")
+
+    def rename_in_place(self, pid, kind):
+        return self.keep_old_executable(pid, kind, (self.app / bql.EXECUTABLES[kind]).with_name("Old"))
+
+    def keep_old_executable(self, pid, kind, old):
+        executable = self.app / bql.EXECUTABLES[kind]
+        os.link(executable, old)
+        executable.unlink()
+        shutil.copy(old, executable)
+        self.processes[pid] = str(old)
+        self.libproc.executed_names[pid] = executable.name
+        return old
+
+    def inside(self, path):
+        if self.root not in Path(os.path.realpath(path)).parents:
+            raise AssertionError(f"{path} is outside the test folder")
+        return Path(path)
+
+    def installed(self):
+        return (self.app / bql.EXECUTABLES["app"]).read_text()
+
+    def mutations(self):
+        def mutates(args):
+            return (args[0] in ("check-build", "osascript", "rm", "ditto", "open")
+                    or args[:2] in ([bql.LSREGISTER, "-u"], [bql.LSREGISTER, "-f"], ["pluginkit", "-a"],
+                                    ["pluginkit", "-e"]))
+        return [args[:1] if args[0] == "osascript" else args for args in self.commands if mutates(args)]
+
+    def run(self, args, input=None, capture_output=True, text=True, timeout=120):
+        args = list(map(str, args))
+        self.commands.append(args)
+        if any(args[:len(prefix)] == list(prefix) for prefix in self.hangs):
+            raise subprocess.TimeoutExpired(args, timeout)
+        if any(args[:len(prefix)] == list(prefix) for prefix in self.missing):
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), args[0])
+        for prefix, (returncode, stdout, stderr) in self.failures.items():
+            if args[:len(prefix)] == list(prefix):
+                return subprocess.CompletedProcess(args, returncode, stdout, stderr)
+        return self.answer(args)
+
+    def answer(self, args):
+        done = subprocess.CompletedProcess(args, 0, "", "")
+        if args[:2] == [bql.LSREGISTER, "-dump"]:
+            apps = sorted(self.registered)
+            records = ([(path, bql.BUNDLE_ID) for path in apps] + self.other_records
+                       + [(f"{path}/Contents/PlugIns/{name}.appex", f"{bql.BUNDLE_ID}.{kind}")
+                          for path in apps for kind, name in bql.PLUGINS.items()])
+            done.stdout = "".join(ls_record(*record) for record in records)
+        elif args[:2] == [bql.LSREGISTER, "-u"]:
+            matches = {path for path in self.registered if os.path.realpath(path) == os.path.realpath(args[2])}
+            if not matches and not os.path.exists(args[2]):
+                done.returncode, done.stderr = 1, f"failed to scan {args[2]}: -10814\n"
+            self.registered -= matches
+        elif args[:3] == [bql.LSREGISTER, "-f", "-R"]:
+            self.registered.add(str(self.inside(args[3])))
+        elif args[:2] == ["pluginkit", "-m"]:
+            kind = args[-1].rsplit(".", 1)[1]
+            election = "+" if kind in self.elected else " "
+            done.stdout = "".join(f"{election}    {args[-1]}(1.0)\t1A2B3C4D-0000-0000-0000-000000000001\t"
+                                  f"2026-10-01 12:00:00 +0000\t{path}{self.plugin_suffix}\n"
+                                  for path in self.plugins[kind])
+        elif args[:2] == ["pluginkit", "-a"]:
+            kind = next(kind for kind, name in bql.PLUGINS.items() if args[2].endswith(f"/{name}.appex"))
+            self.plugins[kind] = [str(self.inside(args[2]))]
+        elif args[:3] == ["pluginkit", "-e", "use"]:
+            self.elected.add(args[-1].rsplit(".", 1)[1])
+        elif args[:2] == ["codesign", "-v"]:
+            if int(args[2]) in self.replaced:
+                done.returncode, done.stderr = 1, self.replaced[int(args[2])]
+        elif args[:2] == ["codesign", "-dvvv"]:
+            bundle = Path(args[2])
+            executable = f"Contents/MacOS/{bundle.stem}" if bundle.suffix == ".appex" else bql.EXECUTABLES["app"]
+            done.stderr = f"Executable={bundle}\nCDHash={(bundle / executable).read_text()}\n"
+        elif args[0] == "osascript":
+            if self.quits:
+                installed = os.path.realpath(self.app / bql.EXECUTABLES["app"])
+                self.processes = {pid: path for pid, path in self.processes.items()
+                                  if os.path.realpath(path) != installed}
+        elif args[0] == "rm":
+            removed = Path(args[-1]) / bql.EXECUTABLES["app"]
+            if removed.exists():
+                self.replaced_while_running += [pid for pid, path in self.processes.items()
+                                                if os.path.exists(path) and os.path.samefile(path, removed)]
+            shutil.rmtree(self.inside(args[-1]), ignore_errors=True)
+        elif args[0] == "ditto":
+            shutil.copytree(self.inside(args[1]), self.inside(args[2]))
+        elif args[0] == "open":
+            self.processes[300] = f"{self.inside(args[1])}/{bql.EXECUTABLES['app']}"
+        elif args[:3] == ["git", "-C", str(self.repo)]:
+            self.git(args[3:], done)
+        elif args[0].endswith("/scripts/build.sh"):
+            build = Path(args[0]).parents[1] / self.build.relative_to(self.repo)
+            self.write_bundle(self.inside(build), "main")
+            self.registered.add(str(build))
+            if self.build_deletes:
+                shutil.rmtree(build)
+            if self.build_fails:
+                done.returncode, done.stderr = 65, "** BUILD FAILED **\n"
+        else:
+            raise AssertionError(f"unexpected command {args}")
+        return done
+
+    def git(self, args, done):
+        if args[:2] == ["worktree", "add"]:
+            if self.add_fails != "before":
+                (self.inside(args[-2]) / "scripts").mkdir(parents=True)
+                self.worktrees.add(args[-2])
+            if self.add_fails:
+                done.returncode, done.stderr = 128, "fatal: could not check out origin/main\n"
+        elif args[:2] == ["worktree", "remove"]:
+            if args[-1] in self.worktrees:
+                shutil.rmtree(self.inside(args[-1]))
+                self.worktrees.discard(args[-1])
+            else:
+                done.returncode, done.stderr = 128, f"fatal: '{args[-1]}' is not a working tree\n"
+        elif args[0] == "ls-files":
+            done.stdout = "project.yml\n"
+        elif args[:2] != ["fetch", "origin"]:
+            raise AssertionError(f"unexpected git {args}")
+
+    def stubs(self, **changes):
+        def sleep(seconds):
+            self.now[0] += seconds
+
+        def check_build(app):
+            self.commands.append(["check-build", str(app)])
+            return self.build_problems
+        return {"subprocess": SimpleNamespace(run=self.run, TimeoutExpired=subprocess.TimeoutExpired),
+                "LIBPROC": self.libproc, "alive": lambda pid: pid in self.processes, "check_build": check_build,
+                "REPO": self.repo, "BUILD": self.build, "APP": self.app, "WORK": self.root / "work",
+                "STATE": self.root / "work/state.json", "time": SimpleNamespace(time=lambda: self.now[0], sleep=sleep),
+                "tempfile": SimpleNamespace(mkdtemp=lambda: tempfile.mkdtemp(dir=self.root)), **changes}
+
+
+class DoctorTest(unittest.TestCase):
+    def setUp(self):
+        self.mac = FakeMac()
+        self.addCleanup(self.mac.cleanup)
+        self.mac.ready()
+
+    def test_paths_compare_by_the_bundle_they_resolve_to(self):
+        alias = self.mac.alias()
+        executable = f"{self.mac.app}/{bql.EXECUTABLES['app']}"
+        self.mac.processes = {201: f"{alias}/{bql.EXECUTABLES['app']}", 101: f"{alias}/{bql.EXECUTABLES['preview']}"}
+        self.mac.replaced = {201: f"201: {REPLACED}"}
+        self.mac.plugin_suffix = "/"
+        code, result = run_bql("doctor", **self.mac.stubs())
+        self.assertEqual((code, result.get("error")), (1, f"running-app: pid 201 runs {executable}: 201: {REPLACED}"))
+        self.mac.replaced = {}
+        code, result = run_bql("doctor", **self.mac.stubs(APP=alias))
+        self.assertEqual((code, result["ok"], result["observed"]["app"]), (0, True, str(self.mac.app)))
+
+    def test_a_live_process_of_the_app_or_a_copy_counts_however_its_path_is_spelled(self):
+        def renamed_app(mac):
+            mac.replaced = {201: f"201: {REPLACED}"}
+            return f"running-app: pid 201 runs {mac.rename_app()}/{bql.EXECUTABLES['app']}: 201: {REPLACED}"
+
+        def executable_alias(mac):
+            mac.replaced = {201: f"201: {REPLACED}"}
+            return f"running-app: pid 201 runs {mac.alias_executable()}: 201: {REPLACED}"
+
+        def renamed_copy(mac):
+            copy = mac.root / "tmp/Renamed.app"
+            mac.write_bundle(copy, "copy")
+            mac.processes[102] = f"{copy}/{bql.EXECUTABLES['preview']}"
+            return f"running-preview: pid 102 runs {mac.processes[102]}"
+
+        def debug_host_app(mac):
+            debug = mac.root / "DerivedData/Debug/BrushesQuickLook.app"
+            mac.write_bundle(debug, "debug")
+            mac.processes[203] = f"{debug}/{bql.EXECUTABLES['app']}"
+            return None
+
+        for name, setup in [("the installed app is a symlink to a renamed bundle", renamed_app),
+                            ("the installed executable is a symlink", executable_alias),
+                            ("a renamed copy runs its preview extension", renamed_copy),
+                            ("F4 a Debug build runs its host app", debug_host_app)]:
+            with self.subTest(name):
+                mac = FakeMac()
+                self.addCleanup(mac.cleanup)
+                mac.ready()
+                error = setup(mac)
+                code, result = run_bql("doctor", **mac.stubs())
+                self.assertEqual((code, result.get("error")), (1 if error else 0, error))
+
+    def test_only_complete_paths_of_records_with_the_app_bundle_id_are_copies(self):
+        app, other, renamed = str(self.mac.app), f"{self.mac.app}-other", str(self.mac.root / "tmp/Renamed.app")
+        rows = [
+            ("a prefix collision alone", {other},
+             f"launchservices: other copies are registered: {other}. launchservices: {app} is not registered"),
+            ("a prefix collision beside the app", {app, other},
+             f"launchservices: other copies are registered: {other}"),
+            ("a renamed copy", {app, renamed}, f"launchservices: other copies are registered: {renamed}"),
+        ]
+        for name, registered, error in rows:
+            with self.subTest(name):
+                self.mac.registered = registered
+                code, result = run_bql("doctor", **self.mac.stubs())
+                self.assertEqual((code, result.get("error")), (1, error))
+
+    def test_a_live_process_that_fails_verification_without_a_message_fails_readiness(self):
+        self.mac.replaced = {101: ""}
+        code, result = run_bql("doctor", **self.mac.stubs())
+        executable = f"{self.mac.app}/{bql.EXECUTABLES['preview']}"
+        self.assertEqual((code, result.get("error")),
+                         (1, f"running-preview: pid 101 runs {executable}: codesign -v exited 1"))
+
+    def test_a_failed_or_signalled_collector_exits_2_instead_of_reading_as_an_observation(self):
+        cdhash = f"Executable={self.mac.app}\nCDHash=main_app\n"
+        source_list = ("git", "-C", str(self.mac.repo), "ls-files")
+        rows = [((bql.LSREGISTER, "-dump"), 1, "", ""), ((bql.LSREGISTER, "-dump"), -15, "", ""),
+                (("pluginkit", "-m"), 1, "", ""), (("pluginkit", "-m"), -15, "", ""),
+                (("codesign", "-v"), 2, "", ""), (("codesign", "-v"), -15, "", ""),
+                (("codesign", "-dvvv"), 7, "", cdhash), (("codesign", "-dvvv"), -15, "", ""),
+                (("codesign", "-dvvv"), 0, "", "Executable=x\n"),
+                (source_list, 7, "project.yml\n", "partial listing"), (source_list, -15, "project.yml\n", "")]
+        for prefix, returncode, stdout, stderr in rows:
+            with self.subTest(command=" ".join(prefix), returncode=returncode):
+                self.mac.failures = {prefix: (returncode, stdout, stderr)}
+                code, result = run_bql("doctor", **self.mac.stubs())
+                self.assertEqual((code, result["ok"], bool(result.get("fix"))), (2, False, True))
+                self.assertIn(" ".join(prefix), result["error"])
+        self.mac.failures = {}
+        for call, error in [("proc_listpids", errno.EPERM), ("proc_name 101", errno.EINVAL),
+                            ("proc_pidpath 101", errno.EPERM)]:
+            with self.subTest(call=call):
+                self.mac.libproc.errors = {call: error}
+                code, result = run_bql("doctor", **self.mac.stubs())
+                self.assertEqual((code, result["ok"], bool(result.get("fix"))), (2, False, True))
+                self.assertIn(f"{call} failed: {os.strerror(error)}", result["error"])
+
+    def test_a_process_listed_after_the_first_1024_is_observed(self):
+        self.mac.processes = {**{10000 + i: f"/usr/bin/tool{i}" for i in range(1100)}, **self.mac.processes}
+        self.mac.replaced = {201: f"201: {REPLACED}"}
+        code, result = run_bql("doctor", **self.mac.stubs())
+        self.assertEqual((code, re.findall(r"running-app: pid (\d+)", result.get("error", ""))), (1, ["201"]))
+
+    def test_a_process_that_exited_after_the_listing_or_runs_as_another_user_is_not_observed(self):
+        self.mac.processes[401] = "/usr/bin/login"
+        self.mac.libproc.errors = {"proc_name 401": errno.EPERM}
+        self.mac.libproc.exited = {402}
+        code, result = run_bql("doctor", **self.mac.stubs())
+        self.assertEqual((code, [p["pid"] for p in result["observed"]["processes"]]), (0, [201, 101]))
+
+    def test_a_process_that_runs_the_installed_file_through_a_hard_link_runs_the_installed_app(self):
+        link = self.mac.root / "link"
+        os.link(self.mac.app / bql.EXECUTABLES["preview"], link)
+        self.mac.processes[101] = str(link)
+        self.mac.libproc.executed_names[101] = "BrushesPreview"
+        code, result = run_bql("doctor", **self.mac.stubs())
+        self.assertEqual((code, [(p["pid"], p["elsewhere"]) for p in result["observed"]["processes"]]),
+                         (0, [(201, False), (101, False)]))
+
+    def test_a_live_process_counts_after_its_executable_is_deleted_or_replaced(self):
+        for kind in bql.EXECUTABLES:
+            for setup in (FakeMac.delete_copy, FakeMac.swap_bundle, FakeMac.hard_link, FakeMac.rename_in_place):
+                with self.subTest(kind=kind, setup=setup.__name__):
+                    mac = FakeMac()
+                    self.addCleanup(mac.cleanup)
+                    mac.ready()
+                    mac.processes = {}
+                    runs = setup(mac, 102, kind) or "a deleted executable"
+                    code, result = run_bql("doctor", **mac.stubs())
+                    self.assertEqual((code, result.get("error")), (1, f"running-{kind}: pid 102 runs {runs}"))
+                    self.assertIn("Run `kill 102`", result["fix"])
+
+
+class InstallTest(unittest.TestCase):
+    def setUp(self):
+        self.mac = self.new_mac()
+
+    def new_mac(self):
+        mac = FakeMac()
+        self.addCleanup(mac.cleanup)
+        mac.write_bundle(mac.app, "old")
+        mac.write_bundle(mac.build, "branch")
+        debug = mac.root / "DerivedData/Debug/BrushesQuickLook.app"
+        mac.write_bundle(debug, "debug")
+        mac.registered = {DEBUG}
+        mac.processes = {201: f"{mac.app}/{bql.EXECUTABLES['app']}", 203: f"{debug}/{bql.EXECUTABLES['app']}"}
+        return mac
+
+    def worktree(self, mac):
+        return next(Path(args[-2]) for args in mac.commands if args[3:5] == ["worktree", "add"])
+
+    def test_it_replaces_registers_and_elects_the_build_in_order_then_passes_readiness(self):
+        app, build = self.mac.app, self.mac.build
+        code, result = run_bql("install", "--no-build", **self.mac.stubs())
+        self.assertEqual((code, result["steps"]), (0, ["check-build", "unregister 1 stale paths", "quit", "replace",
+                                                       "register", "verify"]))
+        self.assertEqual(self.mac.mutations(), [
+            ["check-build", str(build)], [bql.LSREGISTER, "-u", DEBUG], ["osascript"], ["rm", "-rf", "--", str(app)],
+            ["ditto", str(build), str(app)], [bql.LSREGISTER, "-f", "-R", str(app)],
+            ["pluginkit", "-a", f"{app}/Contents/PlugIns/BrushesPreview.appex"],
+            ["pluginkit", "-a", f"{app}/Contents/PlugIns/BrushesThumbnail.appex"], ["open", str(app)],
+            ["pluginkit", "-e", "use", "-i", f"{bql.BUNDLE_ID}.preview"],
+            ["pluginkit", "-e", "use", "-i", f"{bql.BUNDLE_ID}.thumbnail"]])
+        self.assertEqual((self.mac.installed(), self.mac.registered, set(self.mac.processes)),
+                         ("branch_app", {str(app)}, {203, 300}))
+
+    def test_a_build_that_fails_check_build_changes_nothing(self):
+        self.mac.build_problems = [("BrushesQuickLook.app Contents/Resources/AppIcon.icns", "is missing", "Keep it.")]
+        code, result = run_bql("install", "--no-build", **self.mac.stubs())
+        self.assertEqual((code, result["failed_step"], result["error"]),
+                         (1, "check-build", "BrushesQuickLook.app Contents/Resources/AppIcon.icns: is missing"))
+        self.assertEqual((self.mac.mutations(), self.mac.installed(), self.mac.registered),
+                         ([["check-build", str(self.mac.build)]], "old_app", {DEBUG}))
+
+    def test_a_problem_left_after_the_install_fails_it_with_the_fix_from_readiness(self):
+        def stale_preview(mac):
+            mac.processes[102] = f"{mac.app}/{bql.EXECUTABLES['preview']}"
+            mac.replaced = {102: f"102: {REPLACED}"}
+            return f"running-preview: pid 102 runs {mac.processes[102]}: 102: {REPLACED}"
+
+        def renamed_copy_preview(mac):
+            copy = mac.root / "tmp/Renamed.app"
+            mac.write_bundle(copy, "copy")
+            mac.processes[102] = f"{copy}/{bql.EXECUTABLES['preview']}"
+            return f"running-preview: pid 102 runs {mac.processes[102]}"
+
+        for name, setup in [("a preview process of the replaced app", stale_preview),
+                            ("a preview process of a renamed copy", renamed_copy_preview)]:
+            with self.subTest(name):
+                mac = self.new_mac()
+                error = setup(mac)
+                code, result = run_bql("install", "--no-build", **mac.stubs())
+                self.assertEqual((code, result.get("failed_step"), result.get("error"), mac.installed()),
+                                 (1, "verify", error, "branch_app"))
+                self.assertIn("Run `kill 102`.", result["fix"])
+
+    def test_an_app_still_running_10_s_after_the_quit_request_fails_the_install_and_is_not_killed(self):
+        self.mac.quits = False
+        code, result = run_bql("install", "--no-build", **self.mac.stubs())
+        self.assertEqual((code, result["failed_step"], result["steps"]),
+                         (1, "quit", ["check-build", "unregister 1 stale paths"]))
+        self.assertIn(f"pid 201 still runs {self.mac.app} 10 s after the quit request", result["error"])
+        self.assertEqual((self.mac.now[0], set(self.mac.processes), self.mac.installed()), (10, {201, 203}, "old_app"))
+
+    def test_the_running_installed_app_blocks_the_replacement_however_its_path_is_spelled_or_lost(self):
+        def app_through_alias(mac):
+            mac.processes[201] = f"{mac.alias()}/{bql.EXECUTABLES['app']}"
+            return {}
+
+        def destination_alias(mac):
+            return {"APP": mac.alias()}
+
+        def renamed_destination(mac):
+            mac.rename_app()
+            return {}
+
+        def executable_alias(mac):
+            mac.alias_executable()
+            return {}
+
+        def destination_in_another_case(mac):
+            other_case = mac.app.with_name(mac.app.name.lower())
+            if not other_case.exists():
+                self.skipTest("the volume is case-sensitive")
+            return {"APP": other_case}
+
+        def swapped_bundle(mac):
+            mac.swap_bundle(201, "app")
+            return {}
+
+        def old_hard_link(mac):
+            mac.hard_link(201, "app")
+            return {}
+
+        def renamed_in_place(mac):
+            mac.rename_in_place(201, "app")
+            return {}
+
+        for name, setup in [("the app runs through an alias", app_through_alias),
+                            ("the destination is an alias", destination_alias),
+                            ("the destination is a symlink to a renamed bundle", renamed_destination),
+                            ("the installed executable is a symlink", executable_alias),
+                            ("the destination is spelled in another case", destination_in_another_case),
+                            ("an installer swapped the bundle under the app", swapped_bundle),
+                            ("the app runs an old hard link of its executable", old_hard_link),
+                            ("the app runs its old executable renamed in the bundle", renamed_in_place)]:
+            with self.subTest(name):
+                mac = self.new_mac()
+                mac.quits = False
+                code, result = run_bql("install", "--no-build", **mac.stubs(**setup(mac)))
+                self.assertEqual((code, result.get("failed_step"), mac.replaced_while_running, mac.installed()),
+                                 (1, "quit", [], "old_app"))
+
+    def test_a_registration_of_the_destination_through_an_alias_is_not_unregistered(self):
+        for name, registration_is_alias in (("the registration is an alias", True),
+                                            ("the destination is an alias", False)):
+            with self.subTest(name):
+                mac = self.new_mac()
+                alias = mac.alias()
+                registration, destination = (alias, mac.app) if registration_is_alias else (mac.app, alias)
+                mac.registered = {str(registration), DEBUG}
+                code, result = run_bql("install", "--no-build", **mac.stubs(APP=destination))
+                unregistered = [args[2] for args in mac.commands if args[:2] == [bql.LSREGISTER, "-u"]]
+                self.assertEqual((code, result["ok"], unregistered), (0, True, [DEBUG]))
+
+    def test_a_failed_process_table_read_stops_the_install_before_the_replacement(self):
+        for call, error in [("proc_listpids", errno.EPERM), ("proc_name 201", errno.EINVAL),
+                            ("proc_pidpath 201", errno.EPERM)]:
+            with self.subTest(call=call):
+                mac = self.new_mac()
+                mac.quits = False
+                mac.libproc.errors = {call: error}
+                code, result = run_bql("install", "--no-build", **mac.stubs())
+                self.assertEqual((code, result["ok"], mac.replaced_while_running, mac.installed()),
+                                 (2, False, [], "old_app"))
+                self.assertIn(f"{call} failed", result["error"])
+
+    def test_a_failed_unregister_stops_the_install_before_the_quit(self):
+        self.mac.failures[(bql.LSREGISTER, "-u")] = (7, "", "unregister denied")
+        code, result = run_bql("install", "--no-build", **self.mac.stubs())
+        self.assertEqual((code, result["ok"]), (2, False))
+        self.assertIn(f"{bql.LSREGISTER} -u {DEBUG} exited 7: unregister denied", result["error"])
+        self.assertEqual(self.mac.mutations(), [["check-build", str(self.mac.build)], [bql.LSREGISTER, "-u", DEBUG]])
+
+    def test_main_installs_origin_main_built_in_a_temporary_worktree_then_removes_it(self):
+        code, result = run_bql("install", "--main", **self.mac.stubs())
+        worktree = self.worktree(self.mac)
+        repo = str(self.mac.repo)
+        self.assertEqual((code, result["steps"]), (0, ["build", "check-build", "unregister 2 stale paths", "quit",
+                                                       "replace", "register", "verify"]))
+        self.assertEqual([args for args in self.mac.commands if args[0] == "git" or args[0].endswith("build.sh")], [
+            ["git", "-C", repo, "fetch", "origin", "main"],
+            ["git", "-C", repo, "worktree", "add", "--detach", str(worktree), "origin/main"],
+            [f"{worktree}/scripts/build.sh"],
+            ["git", "-C", repo, "worktree", "remove", "--force", str(worktree)]])
+        self.assertEqual((self.mac.installed(), self.mac.registered, set(self.mac.processes)),
+                         ("main_app", {str(self.mac.app)}, {203, 300}))
+        self.assertFalse(worktree.exists())
+
+    def test_main_cleanup_runs_after_every_failure_and_reports_what_it_left(self):
+        build_failed = "scripts/build.sh: ** BUILD FAILED **"
+        unregister, remove = "{lsregister} -u {build}", "git -C {repo} worktree remove --force {worktree}"
+        rows = [
+            ("the build fails", {"build_fails": True}, 1, [build_failed], False, False, []),
+            ("the build registers its product, deletes it and fails", {"build_fails": True, "build_deletes": True},
+             1, [build_failed], False, False, []),
+            ("the build fails and its unregister fails",
+             {"build_fails": True, "failures": {("{lsregister}", "-u"): (7, "", "unregister denied")}}, 2,
+             [build_failed, "-u {build} exited 7: unregister denied"], False, True, [unregister]),
+            ("the build fails and its unregister hangs", {"build_fails": True, "hangs": {("{lsregister}", "-u")}}, 2,
+             [build_failed, "-u {build} did not return within 120 s"], False, True, [unregister]),
+            ("the build fails and its unregister cannot start",
+             {"build_fails": True, "missing": {("{lsregister}", "-u")}}, 2,
+             [build_failed, "-u {build}: [Errno 2] No such file or directory"], False, True, [unregister]),
+            ("the build fails and LaunchServices cannot be read",
+             {"build_fails": True, "failures": {("{lsregister}", "-dump"): (7, "", "dump denied")}}, 2,
+             [build_failed, "-dump exited 7: dump denied"], False, False, [unregister]),
+            ("pluginkit -a fails", {"failures": {("pluginkit", "-a"): (7, "", "add denied")}}, 2,
+             ["exited 7: add denied"], False, False, []),
+            ("the worktree add fails before it writes", {"add_fails": "before"}, 2,
+             ["worktree add --detach {worktree} origin/main exited 128"], False, False, []),
+            ("the worktree add fails after it registers the worktree", {"add_fails": "after"}, 2,
+             ["worktree add --detach {worktree} origin/main exited 128"], False, False, []),
+            ("the worktree removal fails",
+             {"failures": {("git", "-C", "{repo}", "worktree", "remove"): (128, "", "fatal: busy")}}, 2,
+             ["worktree remove --force {worktree} exited 128: fatal: busy"], True, False, [remove]),
+            ("the worktree removal cannot start", {"missing": {("git", "-C", "{repo}", "worktree", "remove")}}, 2,
+             ["worktree remove --force {worktree}: [Errno 2] No such file or directory"], True, False, [remove]),
+        ]
+        for name, changes, expected_code, errors, kept, registered, repairs in rows:
+            with self.subTest(name):
+                mac = self.new_mac()
+
+                def command(prefix):
+                    return tuple(part.format(repo=mac.repo, lsregister=bql.LSREGISTER) for part in prefix)
+                for attribute, value in changes.items():
+                    if attribute == "failures":
+                        value = {command(prefix): failure for prefix, failure in value.items()}
+                    elif attribute in ("hangs", "missing"):
+                        value = set(map(command, value))
+                    setattr(mac, attribute, value)
+                code, result = run_bql("install", "--main", **mac.stubs())
+                worktree = self.worktree(mac)
+                paths = {"build": worktree / bql.BUILD.relative_to(bql.REPO), "worktree": worktree, "repo": mac.repo,
+                         "lsregister": bql.LSREGISTER}
+                self.assertEqual((code, result["ok"], worktree.exists(), str(paths["build"]) in mac.registered),
+                                 (expected_code, False, kept, registered))
+                self.assertEqual([error.format(**paths) in result["error"] for error in errors],
+                                 [True] * len(errors), result["error"])
+                self.assertEqual([f"Run `{repair.format(**paths)}`." in result["fix"] for repair in repairs],
+                                 [True] * len(repairs), result["fix"])
+                if kept:
+                    self.assertEqual(result["steps"][-1], "verify")
 
 
 TYPE, REASONS = "NSPrivacyAccessedAPIType", "NSPrivacyAccessedAPITypeReasons"
