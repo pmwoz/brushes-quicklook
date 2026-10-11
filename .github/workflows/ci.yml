@@ -47,6 +47,8 @@ jobs:
         run: .claude/skills/verify-brushes-quicklook/bql install --no-build
       - name: Copy fixtures
         run: .claude/skills/verify-brushes-quicklook/bql fixtures
+      - name: Check host app
+        run: .claude/skills/verify-brushes-quicklook/bql app
       - name: Hostile sweep
         run: .claude/skills/verify-brushes-quicklook/bql hostile
       - name: Copy crash reports
