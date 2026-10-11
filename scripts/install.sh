@@ -39,7 +39,7 @@ elif [ ! -d "$app" ]; then
     fail build "--no-build needs a Release build at $app"
 fi
 
-observed=$(scripts/check-build.sh "$app" 2>&1) || fail check-build "$observed"
+observed=$(.claude/skills/verify-brushes-quicklook/bql check-build "$app" 2>&1) || fail check-build "$observed"
 printf 'ok check-build\n'
 
 registered() {

@@ -30,6 +30,7 @@ There is no server. Launching means installing this checkout's Release build:
 ```
 bql install --dry-run   # lists the stale registrations and what would be replaced; changes nothing
 bql install             # wraps scripts/install.sh: build, check, replace, register (a few minutes)
+bql check-build <app>   # the Release checks that install and CI run; a failure names the bundle, key and file to fix
 ```
 
 `install` quits the running app and fails when it is still running 10 s later,
@@ -274,6 +275,6 @@ extension processes by name. The only extension kill is the exact PID that
 
 `bql` and `vm` are the only helpers: Python 3 standard library only, no
 dependencies. `bql` calls `qlmanage`, `screencapture`, `osascript`, `codesign`,
-`pluginkit`, `lsregister` and `log`. `vm` calls `tart`, `tar`, `git`,
-`ps`, `xcodegen` and `xcodebuild` on the host. `bql <subcommand> --help` and
-`vm <subcommand> --help` show every flag.
+`lipo`, `nm`, `otool`, `pluginkit`, `lsregister` and `log`. `vm` calls `tart`,
+`tar`, `git`, `ps`, `xcodegen` and `xcodebuild` on the host.
+`bql <subcommand> --help` and `vm <subcommand> --help` show every flag.
