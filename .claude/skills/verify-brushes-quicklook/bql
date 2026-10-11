@@ -6,6 +6,8 @@ check ran and failed, 2 means it could not run (the JSON says what to do).
 """
 
 import argparse
+import ctypes
+import errno
 import json
 import os
 import plistlib
@@ -13,13 +15,16 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 import uuid
 from bisect import bisect_right
 from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Dict, List, Optional
 from xml.parsers.expat import ExpatError
 
 REPO = Path(__file__).resolve().parents[3]
@@ -27,6 +32,8 @@ APP = Path("/Applications/BrushesQuickLook.app")
 BUILD = REPO / "build.noindex/Build/Products/Release/BrushesQuickLook.app"
 BUNDLE_ID = "pl.esdesign.brushesquicklook"
 PLUGINS = {"preview": "BrushesPreview", "thumbnail": "BrushesThumbnail"}
+EXECUTABLES = {"app": "Contents/MacOS/BrushesQuickLook",
+               **{kind: f"Contents/PlugIns/{name}.appex/Contents/MacOS/{name}" for kind, name in PLUGINS.items()}}
 WORK = REPO / "build.noindex/verify"
 FIXTURES = WORK / "fixtures"
 EVIDENCE = WORK / "evidence"
@@ -39,6 +46,8 @@ CRASH_DIR = Path.home() / "Library/Logs/DiagnosticReports"
 CRASH_WAIT_CAP = 120
 LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
               "LaunchServices.framework/Support/lsregister")
+LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+PROC_RUID_ONLY, PROC_PIDPATHINFO_MAXSIZE, MAXCOMLEN = 5, 4096, 16
 SOURCES = ["App", "Preview", "Viewer", "Thumbnail", "Shared", "ffi/src", "ffi/Cargo.toml", "ffi/Cargo.lock", "project.yml"]
 
 WINDOWS_JS = """
@@ -83,6 +92,14 @@ class Fail(Exception):
 def emit(result, code=0):
     print(json.dumps(result, indent=2, default=str))
     sys.exit(code)
+
+
+def describe(error):
+    if isinstance(error, Fail):
+        return error.error, error.fix
+    traceback.print_exc()
+    return (f"{type(error).__name__}: {error}",
+            "bql hit an unexpected error or a hung system command. Read the traceback on stderr.")
 
 
 class ArgumentParser(argparse.ArgumentParser):
@@ -533,8 +550,10 @@ def drive_previews(files, run_dir, settle, via):
 # Subcommands.
 
 def cdhash(path):
-    match = re.search(r"^CDHash=(\w+)$", run(["codesign", "-dvvv", str(path)]).stderr, re.M)
-    return match.group(1) if match else None
+    match = re.search(r"^CDHash=(\w+)$", run(["codesign", "-dvvv", str(path)], check=True).stderr, re.M)
+    if not match:
+        raise Fail(f"codesign -dvvv {path} printed no CDHash", "Run the command by hand to see the full error.")
+    return match.group(1)
 
 
 def bundles(app):
@@ -683,74 +702,189 @@ def check_build(app):
             for kind, bundle in bundles(app).items() for where, error, fix in bundle_problems(kind, bundle)]
 
 
-def cmd_doctor(args):
-    checks = []
+@dataclass(frozen=True)
+class Process:
+    kind: str
+    pid: int
+    path: Optional[str]
+    elsewhere: bool
+    verify_error: Optional[str]
 
-    def check(name, status, detail, fix=None):
-        checks.append({"check": name, "status": status, "detail": detail, **({"fix": fix} if fix else {})})
 
-    install_fix = "Run `bql install`."
-    if not APP.exists():
-        check("installed", "fail", f"{APP} is missing", install_fix)
-    if not BUILD.exists():
-        check("release-build", "fail", f"{BUILD} is missing", install_fix)
+@dataclass(frozen=True)
+class Plugin:
+    election: str
+    path: str
 
-    installed = {kind: cdhash(path) for kind, path in bundles(APP).items()} if APP.exists() else {}
-    if APP.exists() and BUILD.exists():
-        built = {kind: cdhash(path) for kind, path in bundles(BUILD).items()}
-        for kind in installed:
-            same = installed[kind] is not None and installed[kind] == built[kind]
-            check(f"cdhash-{kind}", "ok" if same else "fail",
-                  {"installed": installed[kind], "release_build": built[kind]},
-                  None if same else "The installed app is not the Release build of this checkout. " + install_fix)
-        tracked = run(["git", "-C", str(REPO), "ls-files", "--", *SOURCES]).stdout.split()
-        newest = max(((REPO / f).stat().st_mtime, f) for f in tracked if (REPO / f).exists())
-        built_at = (BUILD / "Contents/MacOS/BrushesQuickLook").stat().st_mtime
-        stale = newest[0] > built_at
-        check("build-fresh", "warn" if stale else "ok",
-              {"newest_source": newest[1], "newer_than_build": stale},
-              "A source file changed after the last Release build. " + install_fix if stale else None)
 
+@dataclass(frozen=True)
+class Observed:
+    app: str
+    build: str
+    installed: Optional[Dict[str, Optional[str]]]
+    built: Optional[Dict[str, Optional[str]]]
+    registered: List[str]
+    plugins: Dict[str, List[Plugin]]
+    processes: List[Process]
+
+
+def readiness(observed):
+    app, install = observed.app, "Run `bql install`."
+    problems = []
+    if observed.installed is None:
+        problems.append(("installed", f"{app} is missing", install))
+    if observed.built is None:
+        problems.append(("release-build", f"{observed.build} is missing", install))
+    if observed.installed and observed.built:
+        problems += [(f"cdhash-{kind}", f"the installed {kind} has CDHash {observed.installed[kind]}, "
+                      f"{observed.build} has {built}", f"The installed app is not that build. {install}")
+                     for kind, built in observed.built.items()
+                     if observed.installed[kind] is None or observed.installed[kind] != built]
+    others = [path for path in observed.registered if path != app]
+    if others:
+        problems.append(("launchservices", f"other copies are registered: {', '.join(others)}",
+                         f"Quick Look may route to them. {install} It unregisters every other copy."))
+    if app not in observed.registered:
+        problems.append(("launchservices", f"{app} is not registered", install))
     for kind, name in PLUGINS.items():
+        expected = Plugin("+", f"{app}/Contents/PlugIns/{name}.appex")
+        if observed.plugins[kind] != [expected]:
+            listed = [f"{plugin.election} {plugin.path}" for plugin in observed.plugins[kind]]
+            problems.append((f"pluginkit-{kind}", f"registrations: {listed or 'none'}",
+                             f"Expected one registration elected for use (+) at {expected.path}. {install}"))
+    for process in observed.processes:
+        if process.elsewhere or process.verify_error is not None:
+            restart = (f"`open` sends files to it. Run `kill {process.pid}`, then `open {app}`."
+                       if process.kind == "app" else f"It keeps serving requests. Run `kill {process.pid}`. Quick "
+                       "Look starts a fresh one from the installed app on the next request.")
+            runs = process.path or "a deleted executable"
+            problems.append((f"running-{process.kind}", f"pid {process.pid} runs {runs}"
+                             + (f": {process.verify_error}" if process.verify_error is not None else ""),
+                             f"This process does not run the installed binary. {restart}"))
+    return problems
+
+
+def registered():
+    dump = run([LSREGISTER, "-dump"], timeout=120, check=True).stdout
+    paths = set()
+    for record in re.split(r"^-{20,}$", dump, flags=re.M):
+        identifier = re.search(r"^\s*identifier:(.*)$", record, re.M)
+        path = re.search(r"^\s*path:(.*?)(?: \(0x[0-9a-f]+\))?$", record, re.M)
+        if identifier and path and identifier[1].strip() == BUNDLE_ID:
+            paths.add(os.path.realpath(path[1].strip()))
+    return sorted(paths)
+
+
+def process_table():
+    fix = "Rerun. bql cannot tell which processes run the app without the process table."
+    count = 1024
+    while True:
+        pids = (ctypes.c_int * count)()
+        filled = LIBPROC.proc_listpids(PROC_RUID_ONLY, os.getuid(), pids, ctypes.sizeof(pids))
+        if filled <= 0:
+            raise Fail(f"proc_listpids failed: {os.strerror(ctypes.get_errno())}", fix)
+        if filled < ctypes.sizeof(pids):
+            break
+        count *= 2
+    table = {}
+    name = ctypes.create_string_buffer(2 * MAXCOMLEN)
+    path = ctypes.create_string_buffer(PROC_PIDPATHINFO_MAXSIZE)
+    for pid in pids[:filled // ctypes.sizeof(ctypes.c_int)]:
+        if LIBPROC.proc_name(pid, name, ctypes.sizeof(name)) <= 0:
+            # EPERM: PROC_RUID_ONLY lists setuid processes such as login by their real uid, and proc_name refuses them.
+            # The app's processes are never setuid.
+            if ctypes.get_errno() in (errno.ESRCH, errno.EPERM):
+                continue
+            raise Fail(f"proc_name {pid} failed: {os.strerror(ctypes.get_errno())}", fix)
+        if LIBPROC.proc_pidpath(pid, path, ctypes.sizeof(path)) > 0:
+            table[pid] = os.fsdecode(name.value), os.fsdecode(path.value)
+        # ENOENT: no file is left at the executable's last path. The name outlives it, since the kernel keeps the
+        # name of the file the process executed.
+        elif ctypes.get_errno() in (errno.ESRCH, errno.ENOENT):
+            table[pid] = os.fsdecode(name.value), None
+        else:
+            raise Fail(f"proc_pidpath {pid} failed: {os.strerror(ctypes.get_errno())}", fix)
+    return table
+
+
+def file_identity(path):
+    try:
+        stat = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return stat.st_dev, stat.st_ino
+
+
+def bundle_identifier(executable):
+    try:
+        info = plistlib.loads((Path(executable).parent.parent / "Info.plist").read_bytes())
+    except (OSError, ValueError, ExpatError):
+        return None
+    return info.get("CFBundleIdentifier") if isinstance(info, dict) else None
+
+
+def app_processes(app):
+    installed = {identity: kind for kind, executable in EXECUTABLES.items()
+                 if (identity := file_identity(app / executable))}
+    bundle = file_identity(app)
+    copies = {BUNDLE_ID: "app", **{f"{BUNDLE_ID}.{kind}": kind for kind in PLUGINS}}
+    names = {Path(executable).name: kind for kind, executable in EXECUTABLES.items()}
+    found = []
+    for pid, (name, path) in process_table().items():
+        kind = installed.get(path and file_identity(path))
+        elsewhere = kind is None
+        if elsewhere:
+            copy = path and copies.get(bundle_identifier(path))
+            # `open -a APP` starts the copy at APP rather than use a host app running elsewhere, such as a Debug build.
+            if copy == "app" and file_identity(Path(path).parent.parent.parent) != bundle:
+                continue
+            kind = copy or names.get(name)
+            if kind is None:
+                continue
+        # A pid's CDHash is read from disk, so only `codesign -v` sees a file replaced under it at the same path.
+        verify = run(["codesign", "-v", str(pid)])
+        if verify.returncode not in (0, 1):
+            raise Fail(f"codesign -v {pid} exited {verify.returncode}: {verify.stderr.strip()}",
+                       "Run the command by hand to see the full error.")
+        if not alive(pid):
+            continue
+        found.append(Process(kind, pid, path, elsewhere,
+                             (verify.stderr.strip() or "codesign -v exited 1") if verify.returncode == 1 else None))
+    return found
+
+
+def observe(app, build):
+    app, build = Path(os.path.realpath(app)), Path(os.path.realpath(build))
+
+    def cdhashes(bundle):
+        if not bundle.exists():
+            return None
+        return {kind: cdhash(path) if path.exists() else None for kind, path in bundles(bundle).items()}
+
+    def plugins(kind):
         bundle_id = f"{BUNDLE_ID}.{kind}"
-        lines = [line for line in run(["pluginkit", "-m", "-v", "-A", "-i", bundle_id]).stdout.splitlines()
-                 if bundle_id in line]
-        expected = str(APP / f"Contents/PlugIns/{name}.appex")
-        good = len(lines) == 1 and lines[0].rstrip().endswith(expected) and not lines[0].startswith("-")
-        check(f"pluginkit-{kind}", "ok" if good else "fail", lines or "not registered",
-              None if good else f"Expected one enabled registration at {expected}. " + install_fix)
+        listed = run(["pluginkit", "-m", "-v", "-A", "-i", bundle_id], check=True).stdout
+        # A line starts with the election (+ use, - ignore, a space for none) and ends with a tab and the path.
+        return [Plugin(line[:1], os.path.realpath(line.rsplit("\t", 1)[-1].strip()))
+                for line in listed.splitlines() if bundle_id in line]
 
-    dump = run([LSREGISTER, "-dump"], timeout=120).stdout
-    paths = sorted(set(re.findall(r"^\s*path:\s*(.*BrushesQuickLook\.app)\b", dump, re.M)))
-    extra = [p for p in paths if p != str(APP)]
-    check("launchservices", "warn" if extra else "ok", paths,
-          f"Other copies are registered; Quick Look may route to them. {install_fix} unregisters them." if extra else None)
+    return Observed(app=str(app), build=str(build), installed=cdhashes(app), built=cdhashes(build),
+                    registered=registered(), plugins={kind: plugins(kind) for kind in PLUGINS},
+                    processes=app_processes(app))
 
-    executables = {"app": "Contents/MacOS/BrushesQuickLook",
-                   **{kind: f"Contents/PlugIns/{name}.appex/Contents/MacOS/{name}" for kind, name in PLUGINS.items()}}
-    for kind, executable in executables.items():
-        name = executable.rsplit("/", 1)[1]
-        for pid in run(["pgrep", "-U", str(os.getuid()), "-x", name]).stdout.split():
-            path = run(["ps", "-o", "comm=", "-p", pid]).stdout.strip()
-            if not path.endswith(f"BrushesQuickLook.app/{executable}"):
-                continue
-            elsewhere = path != str(APP / executable)
-            # Like app_pids in scripts/install.sh: `open -a APP` starts the copy at APP rather than using one elsewhere.
-            if elsewhere and kind == "app":
-                continue
-            # A pid's CDHash is read from disk, so only `codesign -v` sees a file replaced or deleted under it.
-            verify = run(["codesign", "-v", pid])
-            invalid = verify.returncode != 0 and run(["kill", "-0", pid]).returncode == 0
-            stale = elsewhere or invalid
-            restart = (f"`open` sends files to it. Run `kill {pid}`, then `open {APP}`." if kind == "app" else
-                       f"It keeps serving requests. Run `kill {pid}`; Quick Look starts a fresh one on the next request.")
-            check(f"running-{kind}", "warn" if stale else "ok",
-                  {"pid": int(pid), "path": path, "verify": verify.stderr.strip() if invalid else None},
-                  f"This {name} process runs an older binary. {restart}" if stale else None)
 
-    failures = [(f"{c['check']} failed", c["fix"]) for c in checks if c["status"] == "fail"]
-    emit(verdict({"repo": str(REPO), "installed_app": str(APP), "release_build": str(BUILD), "checks": checks},
-                 failures), 1 if failures else 0)
+def cmd_doctor(args):
+    observed = observe(APP, BUILD)
+    result = {"repo": str(REPO), "observed": asdict(observed)}
+    if BUILD.exists():
+        tracked = run(["git", "-C", str(REPO), "ls-files", "--", *SOURCES], check=True).stdout.split()
+        newest = max(((REPO / f).stat().st_mtime, f) for f in tracked if (REPO / f).exists())
+        stale = newest[0] > (BUILD / "Contents/MacOS/BrushesQuickLook").stat().st_mtime
+        result["build_fresh"] = {"newest_source": newest[1], "newer_than_build": stale}
+        if stale:
+            result["note"] = "A source file changed after the last Release build. Run `bql install` to verify it."
+    problems = readiness(observed)
+    emit(verdict(result, [(f"{name}: {error}", fix) for name, error, fix in problems]), 1 if problems else 0)
 
 
 def cmd_check_build(args):
@@ -760,44 +894,126 @@ def cmd_check_build(args):
          1 if problems else 0)
 
 
-def cmd_install(args):
-    script = REPO / "scripts/install.sh"
-    if args.dry_run:
-        dump = run([LSREGISTER, "-dump"], timeout=120).stdout
-        paths = sorted(set(re.findall(r"^\s*path:\s*(.*BrushesQuickLook\.app)\b", dump, re.M)))
-        build = [] if args.no_build else ["xcodegen generate", f"xcodebuild Release into {BUILD}"]
-        emit({"ok": True, "dry_run": True, "script": str(script), "would": [
-            *build,
-            f"bql check-build {BUILD}",
-            {"unregister_from_launchservices": [p for p in paths if p != str(APP)]},
-            f"quit the running app and wait up to 10 s for it to exit, delete {APP} and copy the Release build there",
-            f"register {APP} and both extensions with lsregister and pluginkit",
-            f"open {APP} (its window stays open until `bql cleanup`)",
-        ]})
-    note("installing the existing Release build" if args.no_build
-         else "building Release and installing, this takes a few minutes")
-    proc = run([str(script), *(["--no-build"] if args.no_build else [])], timeout=1800)
-    steps = re.findall(r"^ok (.+)$", proc.stdout, re.M)
-    failed = re.search(r"^FAIL (\S+) (.*)$", proc.stderr, re.M)
-    if proc.returncode != 0:
-        fixes = {
-            "build": "Run the xcodebuild command from README.md to see the full compiler output.",
-            "check-build": "The Release build failed `bql check-build`. Its JSON at the end of `error` names each "
-                           f"bundle, key and file to fix. Run `bql check-build {BUILD}` to read it on its own.",
-            "quit": "BrushesQuickLook did not quit, because a sheet or panel is open or another instance runs. Close "
-                    "the sheet or `kill` the pids in the error, then rerun `bql install`.",
-            "replace": "Check that /Applications is writable and the app is not open from a mounted image.",
-            "verify": "Another copy is still registered or a live extension process runs an older binary. "
-                      "Run `bql doctor`, then unregister the copy with lsregister -u or kill the PID it names.",
-        }
-        step = failed.group(1) if failed else "unknown"
-        emit({"ok": False, "steps": steps, "failed_step": step,
-              "error": failed.group(2) if failed else proc.stderr.strip()[-2000:],
-              "fix": fixes.get(step, "Run scripts/install.sh by hand to see the full output.")}, 1)
+def remove_checkout(checkout):
+    def attempt(args):
+        try:
+            run(args, check=True)
+        except Fail as failure:
+            return failure.error
+        except subprocess.TimeoutExpired as error:
+            return f"{' '.join(args)} did not return within {error.timeout:g} s"
+        except OSError as error:
+            return f"{' '.join(args)}: {error}"
+        return None
+
+    left = []
+    # xcodebuild registers its product with LaunchServices, and the record outlives a deleted product. lsregister -u
+    # also exits 1 on a path that is neither registered nor on disk, so the dump decides whether the record is gone.
+    build = checkout / BUILD.relative_to(REPO)
+    unregister = [LSREGISTER, "-u", str(build)]
+    error = attempt(unregister)
+    try:
+        if str(build) in registered():
+            left.append((f"cleanup: {error or f'{build} is still registered'}", f"Run `{' '.join(unregister)}`."))
+    except (Fail, subprocess.TimeoutExpired, OSError) as failure:
+        left.append((f"cleanup: cannot tell whether {build} is unregistered: {getattr(failure, 'error', failure)}",
+                     f"Run `{' '.join(unregister)}`."))
+    remove = ["git", "-C", str(REPO), "worktree", "remove", "--force", str(checkout)]
+    if (error := attempt(remove)) and checkout.exists():
+        if any(checkout.iterdir()):
+            left.append((f"cleanup: {error}", f"Run `{' '.join(remove)}`."))
+        else:
+            checkout.rmdir()
+    return left
+
+
+def install(checkout, build_first):
+    app = Path(os.path.realpath(APP))
+    build = checkout / BUILD.relative_to(REPO)
+    steps = []
+    if build_first:
+        note(f"building Release in {checkout}, this takes a few minutes")
+        proc = run([str(checkout / "scripts/build.sh")], timeout=1800)
+        if proc.returncode != 0:
+            return steps, "build", [("scripts/build.sh", (proc.stderr.strip() or proc.stdout.strip())[-2000:],
+                                     "Run the xcodebuild command from README.md to see the full compiler output.")]
+        steps.append("build")
+    elif not build.exists():
+        raise Fail(f"--no-build needs a Release build at {build}",
+                   "Run `bql install` without --no-build. In a Tart guest, run `vm sync` on the host first.")
+    problems = check_build(build)
+    if problems:
+        return steps, "check-build", problems
+    steps.append("check-build")
+
+    stale = [path for path in registered() if path != str(app)]
+    for path in stale:
+        run([LSREGISTER, "-u", path], check=True)
+    steps.append(f"unregister {len(stale)} stale paths")
+
+    def app_pids():
+        return [p.pid for p in app_processes(app) if p.kind == "app"]
+
+    # The quit reply arrives before the process exits. `open` during the exit goes to the dying process.
+    deadline = time.time() + 10
+    request = osascript(f'with timeout of 10 seconds\ntell application id "{BUNDLE_ID}" to quit\nend timeout')
+    wait_for(lambda: not app_pids(), timeout=deadline - time.time())
+    pids = app_pids()
+    if pids:
+        return steps, "quit", [("quit", f"pid {' '.join(map(str, pids))} still runs {app} 10 s after the quit "
+                                f"request. {request.stderr.strip()}".strip(),
+                                "BrushesQuickLook did not quit, because a sheet or panel is open or another "
+                                "instance runs. Close the sheet or `kill` the pids in the error, then rerun "
+                                "`bql install`.")]
+    steps.append("quit")
+
+    for command in (["rm", "-rf", "--", str(app)], ["ditto", str(build), str(app)]):
+        proc = run(command)
+        if proc.returncode != 0:
+            return steps, "replace", [("replace", f"{' '.join(command)} exited {proc.returncode}: "
+                                       f"{proc.stderr.strip()}", "Check that /Applications is writable and the "
+                                       "app is not open from a mounted image.")]
+    steps.append("replace")
+
+    run([LSREGISTER, "-f", "-R", str(app)], check=True)
+    for name in PLUGINS.values():
+        run(["pluginkit", "-a", str(app / f"Contents/PlugIns/{name}.appex")], check=True)
+    run(["open", str(app)], check=True)
     state = load_state()
     state["host_app_opened"] = True
     save_state(state)
-    emit({"ok": True, "steps": steps, "next": "Run `bql doctor`."})
+    for kind in PLUGINS:
+        run(["pluginkit", "-e", "use", "-i", f"{BUNDLE_ID}.{kind}"], check=True)
+    steps.append("register")
+
+    problems = readiness(observe(app, build))
+    if problems:
+        return steps, "verify", problems
+    steps.append("verify")
+    return steps, None, []
+
+
+def cmd_install(args):
+    def outcome(checkout, build_first):
+        steps, failed_step, problems = install(checkout, build_first)
+        return ({"steps": steps, **({"failed_step": failed_step} if failed_step else {})},
+                [(f"{name}: {error}", fix) for name, error, fix in problems])
+
+    if not args.main:
+        result, failures = outcome(REPO, not args.no_build)
+        emit(verdict({**result, **({} if failures else {"next": "Run `bql doctor`."})}, failures),
+             1 if failures else 0)
+    run(["git", "-C", str(REPO), "fetch", "origin", "main"], timeout=600, check=True)
+    checkout = Path(os.path.realpath(tempfile.mkdtemp()))
+    try:
+        run(["git", "-C", str(REPO), "worktree", "add", "--detach", str(checkout), "origin/main"], check=True)
+        result, failures = outcome(checkout, True)
+        code = 1 if failures else 0
+    except Exception as error:
+        result, failures, code = {}, [describe(error)], 2
+    finally:
+        left = remove_checkout(checkout)
+    emit(verdict(result, failures + left), 2 if left else code)
 
 
 def cmd_fixtures(args):
@@ -980,14 +1196,18 @@ def main():
         prog="bql", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Typical run: bql doctor; bql fixtures; bql thumb <file>; bql preview <file>; bql cleanup")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("doctor", help="read-only: is the installed app this checkout's Release build, registered and live")
+    sub.add_parser("doctor", help="read-only: fail unless the installed app is this checkout's Release build, "
+                   "registered once, and the only code its live processes run")
     check = sub.add_parser("check-build", help="check a Release build for universal binaries, hardened runtime, "
                            "sandbox, brush types, privacy manifests, icon, category and encryption flag")
     check.add_argument("app", help=f"the BrushesQuickLook.app to check, such as {BUILD.relative_to(REPO)}")
-    install = sub.add_parser("install", help="build Release and install it to /Applications via scripts/install.sh")
-    install.add_argument("--dry-run", action="store_true", help="list what install would change, change nothing")
-    install.add_argument("--no-build", action="store_true",
-                         help=f"install the existing Release build at {BUILD.relative_to(REPO)}, for the VM guest")
+    install = sub.add_parser("install", help=f"build Release, check it, unregister other copies, replace {APP}, "
+                             "register and open it, then fail on any problem `bql doctor` reports")
+    source = install.add_mutually_exclusive_group()
+    source.add_argument("--no-build", action="store_true",
+                        help=f"install the existing Release build at {BUILD.relative_to(REPO)}, for CI and the VM guest")
+    source.add_argument("--main", action="store_true",
+                        help="build origin/main in a temporary worktree and install that, then remove the worktree")
     sub.add_parser("fixtures", help=f"copy ffi/tests/corpus with brush extensions; list files in ${REAL_FILES_ENV}")
     thumb = sub.add_parser("thumb", help="render Finder thumbnails headlessly with qlmanage -x -t")
     thumb.add_argument("files", nargs="+", help="brush files or folders of them")
@@ -1014,12 +1234,9 @@ def main():
         args.size = [256, 48]
     try:
         globals()[f"cmd_{args.command.replace('-', '_')}"](args)
-    except Fail as failure:
-        emit({"ok": False, "error": failure.error, "fix": failure.fix}, 2)
     except Exception as error:
-        traceback.print_exc()
-        emit({"ok": False, "error": f"{type(error).__name__}: {error}",
-              "fix": "bql hit an unexpected error or a hung system command. Read the traceback on stderr."}, 2)
+        message, fix = describe(error)
+        emit({"ok": False, "error": message, "fix": fix}, 2)
 
 
 if __name__ == "__main__":

@@ -28,19 +28,24 @@ stderr.
 There is no server. Launching means installing this checkout's Release build:
 
 ```
-bql install --dry-run   # lists the stale registrations and what would be replaced; changes nothing
-bql install             # wraps scripts/install.sh: build, check, replace, register (a few minutes)
+bql install             # build, check, replace, register, then the doctor checks (a few minutes)
+bql install --main      # the same for origin/main, built in a temporary worktree
 bql check-build <app>   # the Release checks that install and CI run; a failure names the bundle, key and file to fix
 ```
 
-`install` quits the running app and fails when it is still running 10 s later,
-for example because a sheet is open. It then replaces `/Applications/BrushesQuickLook.app`,
-unregisters every other registered copy, registers the app and both
-extensions, and opens the host app window. Registering ends the app's running
-extension processes. `install` fails when a live extension process still runs
-another binary. The dry run only reads
-`lsregister -dump`. It was checked to leave the app's mtime, the pluginkit
-registration and the running processes unchanged.
+`install` unregisters every other registered copy, then quits the running app
+and fails when it is still running 10 s later, for example because a sheet is
+open. It then replaces `/Applications/BrushesQuickLook.app`, registers the app
+and both extensions, and opens the host app window. Registering ends the app's
+running extension processes. Last, `install` runs the checks of `bql doctor`
+against the build it installed and fails on any problem, with that problem's
+fix. `bql doctor` names every copy that `install` would unregister.
+
+`install --main` fetches `origin/main`, builds it in a temporary detached
+worktree and installs that build. It then unregisters the build and removes the
+worktree, also after a failed step. When either cleanup command fails, it exits
+2 and names the command to finish it. Run it to leave `/Applications` on
+`origin/main` after a session.
 
 Ready means `bql doctor` exits 0.
 
@@ -146,28 +151,42 @@ these recipes need no prompt.
 
 ## Doctor
 
-Run `bql doctor` first and whenever a result looks wrong. It changes nothing and checks:
+Run `bql doctor` first and whenever a result looks wrong. It changes nothing.
+It exits 1 on any of these problems, and `error` starts each one with its name:
 
-- `cdhash-app`, `cdhash-preview`, `cdhash-thumbnail`: the installed bundles
-  match `build.noindex/Build/Products/Release` of this checkout.
-- `build-fresh` (warn): no tracked source file is newer than that build.
-- `pluginkit-preview`, `pluginkit-thumbnail`: exactly one enabled registration,
-  at the `/Applications` path.
-- `launchservices` (warn): no other copy of the app is registered.
-- `running-preview`, `running-thumbnail` (warn): a live extension process runs
-  an older binary. `bql install` ends these processes, so the warning means the
-  app was replaced without registering it again, for example by another
-  checkout or a manual copy. The check reads each process's executable path and
-  uses `codesign -v`, because the CDHash of a pid is read from disk. The check
-  gives the exact `kill <pid>`.
-- `running-app` (warn): the host app at `/Applications` runs a binary that
-  was replaced on disk, so `open` sends files to the old code. The check uses
-  `codesign -v` like the extension checks and gives the exact `kill <pid>`. A
-  copy that runs from another path, such as a Debug build from Xcode, is
-  ignored, like in `bql install`. With such a copy running,
+- `installed`, `release-build`: `/Applications/BrushesQuickLook.app` or
+  `build.noindex/Build/Products/Release/BrushesQuickLook.app` is missing.
+- `cdhash-app`, `cdhash-preview`, `cdhash-thumbnail`: an installed bundle
+  differs from that Release build of this checkout.
+- `launchservices`: LaunchServices does not hold exactly one copy of the app,
+  at `/Applications`. A copy is any bundle with the app's identifier, whatever
+  its name. The error names every other copy.
+- `pluginkit-preview`, `pluginkit-thumbnail`: pluginkit does not hold exactly
+  one registration, at the `/Applications` path, elected for use (`+`).
+- `running-preview`, `running-thumbnail`: a live extension process runs a
+  binary other than the installed one: replaced code, a deleted file, an old
+  hard link, or another copy of the app, whatever its bundle is called. The
+  check uses `codesign -v`, because the CDHash of a pid is read from disk. The
+  fix gives the exact `kill <pid>`.
+- `running-app`: the host app runs a binary other than the installed one:
+  replaced code, a deleted file or an old hard link, so `open` sends files to
+  the old code. The check uses `codesign -v` like the extension checks, and the
+  fix gives the exact `kill <pid>`. A copy that runs from another bundle on
+  disk, such as a Debug build from Xcode, is ignored. With such a copy running,
   `open -a /Applications/BrushesQuickLook.app <file>` starts the
   `/Applications` copy and the quit in `bql install` leaves the other copy
-  running. A copy registered at another path is reported by `launchservices`.
+  running. A copy registered at another path is a `launchservices` problem.
+
+`observed` holds what the checks read, including each bundle's CDHash. Its
+paths are resolved. A process belongs to the app when the kernel names it
+after one of the app's executables or it runs a file in a copy of the app. It
+runs the installed app when it runs the same file, so a symlink, a renamed
+bundle or a relative launch does not hide it, and the quit in `bql install`
+waits for it the same way. A process whose executable was deleted has a null
+`path`.
+`build_fresh` says whether a tracked source file is newer than the Release
+build. It fails nothing. A system command that fails exits 2, so it never
+reads as a clean Mac.
 
 ## Drive
 
