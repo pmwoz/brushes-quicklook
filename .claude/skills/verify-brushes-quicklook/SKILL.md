@@ -198,6 +198,7 @@ bql preview <file|dir>...           # space-bar preview in a qlmanage window, ca
 bql finder <file|dir>...            # the real Finder path: new Finder window, select, space, capture panel, Escape
 bql hostile [dir|file...]           # thumbnail, preview and open every file in a new app instance, exit 1 on a crash, a capped crash-report wait, an unexercised file or too many retries
 bql hostile --via finder            # the same sweep through Finder
+bql app [--case NAME]               # launch the installed app in new instances, compare its windows, File menu and title bar with each case
 bql logs [--last SECONDS]           # load intervals and log messages from the extensions (default 300 s)
 ```
 
@@ -218,6 +219,20 @@ tips. Loads in the output prove the installed build is one that logs.
 - `bql finder` refuses to start while a Quick Look panel is open, because the
   space bar would close it. It opens its own Finder window and closes only
   that window by id. It never touches the user's windows.
+- `bql app` runs the cases `launch`, `files`, `menu` and `title`, or the one
+  `--case` names, on files from `bql fixtures`. Each case launches a new
+  instance with `open -n -F` and a `-BQLLaunch` token, reads it until the
+  windows a step waits for show and the read stays the same for 3 s, at most
+  20 s, and quits only that instance through its Quit menu item. An instance
+  that still runs 10 s later is killed. Before each read, the Close, the Quit
+  and the kill, it checks that the pid still has the start time it had at
+  launch. If not, the instance exited: a read or the Close exits 2, and the
+  Quit and the kill are skipped. Each step in the JSON lists `expected` and
+  `observed`. A read with a failed Accessibility call is `{"error": ...}` and
+  never passes. It reads through Accessibility and sends no Apple Events, so
+  it needs Accessibility for the app that runs the shell and exits 2 without
+  it. The `launch` and `files` defects showed only on macOS 14, so also run
+  `vm run --image sonoma app`.
 - `--settle` (default 2 s) is the wait between the window appearing and the
   capture. The extension shows "Loading brushes…" until parsing finishes. Raise
   it for large real-world files. The preview gives up at 10 s.
@@ -282,9 +297,10 @@ bql cleanup
 
 Cleanup stops only what `bql` started, as listed in
 `build.noindex/verify/state.json`: `qlmanage` PIDs whose command line still
-matches, app instance PIDs from `bql hostile` whose command line still has
-their launch token, Finder windows by id, and the host app window if
-`bql install` opened it.
+matches, app instances from `bql app` and `bql hostile` whose PID still has
+the start time recorded at launch, and Finder windows by id. An app record
+without a start time, from an older `bql`, is listed under
+`unverified_app_records` and left alone.
 It then deletes `build.noindex/verify/fixtures`. The evidence folder stays,
 and the JSON lists the runs it kept. Never kill Quick Look, Finder or
 extension processes by name. The only extension kill is the exact PID that

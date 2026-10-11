@@ -13,6 +13,7 @@ import os
 import plistlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,7 @@ import time
 import traceback
 import uuid
 from bisect import bisect_right
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -48,6 +49,8 @@ LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
               "LaunchServices.framework/Support/lsregister")
 LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
 PROC_RUID_ONLY, PROC_PIDPATHINFO_MAXSIZE, MAXCOMLEN = 5, 4096, 16
+PROC_PIDTBSDINFO, PROC_BSDINFO_SIZE = 3, 136
+CTL_KERN, KERN_PROCARGS2 = 1, 49
 SOURCES = ["App", "Preview", "Viewer", "Thumbnail", "Shared", "ffi/src", "ffi/Cargo.toml", "ffi/Cargo.lock", "project.yml"]
 
 WINDOWS_JS = """
@@ -56,6 +59,84 @@ const list = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(
     $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID)));
 JSON.stringify(list.map(w => ({id: w.kCGWindowNumber, pid: w.kCGWindowOwnerPID,
     owner: w.kCGWindowOwnerName, name: w.kCGWindowName, layer: w.kCGWindowLayer, bounds: w.kCGWindowBounds})));
+"""
+
+AX_JS = """
+ObjC.import("ApplicationServices");
+ObjC.bindFunction("AXIsProcessTrusted", ["bool", []]);
+ObjC.bindFunction("AXUIElementCreateApplication", ["id", ["int"]]);
+ObjC.bindFunction("AXUIElementCopyAttributeValue", ["int", ["id", "id", "id*"]]);
+ObjC.bindFunction("AXUIElementPerformAction", ["int", ["id", "id"]]);
+
+const STALE = -25202;
+const ABSENT = [-25205, -25212];
+
+function attribute(element, name, optional = false) {
+    const value = Ref();
+    const code = $.AXUIElementCopyAttributeValue(element, $(name), value);
+    if (code === 0) return value[0];
+    if (optional && ABSENT.includes(code)) return null;
+    throw {code, error: `${name} failed with AX error ${code}`};
+}
+
+function children(element, name = "AXChildren") {
+    const list = attribute(element, name);
+    return Array.from({length: list.count}, (_, i) => list.objectAtIndex(i));
+}
+
+function text(element, name = "AXTitle", optional = false) {
+    const value = attribute(element, name, optional);
+    return value === null ? null : ObjC.unwrap(value);
+}
+
+function press(element) {
+    const code = $.AXUIElementPerformAction(element, $("AXPress"));
+    if (code !== 0) throw {code, error: `AXPress failed with AX error ${code}`};
+    return {};
+}
+
+// AXChildren can still list File menu items the app has removed, and reading one fails with STALE.
+function menuItem(item) {
+    try {
+        const title = text(item);
+        return title === "" ? "-" : children(item).length ? `${title} >` : title;
+    } catch (failure) {
+        if (failure.code === STALE) return null;
+        throw failure;
+    }
+}
+
+const commands = {
+    read(app) {
+        const windows = children(app, "AXWindows").map(w =>
+            [text(w), children(w).some(c => text(c, "AXDescription", true) === "document actions")]);
+        const file = children(attribute(app, "AXMenuBar")).find(m => text(m) === "File");
+        return {
+            windows: windows.map(([title]) => title),
+            file_menu: file ? children(children(file)[0]).map(menuItem).filter(item => item !== null) : null,
+            document_actions: windows.filter(([, button]) => button).map(([title]) => title),
+        };
+    },
+    close(app, title) {
+        const window = children(app, "AXWindows").find(w => text(w) === title);
+        return window ? press(attribute(window, "AXCloseButton")) : {error: `no window titled ${title}`};
+    },
+    quit(app) {
+        const menus = children(attribute(app, "AXMenuBar"));
+        const item = children(children(menus[1])[0]).find(i => text(i, "AXIdentifier", true) === "terminate:");
+        return item ? press(item) : {error: "no Quit menu item"};
+    },
+};
+
+function run([command, pid, title]) {
+    if (command === "trusted") return JSON.stringify({trusted: $.AXIsProcessTrusted()});
+    try {
+        return JSON.stringify(commands[command]($.AXUIElementCreateApplication(Number(pid)), title));
+    } catch (failure) {
+        if (failure.code === undefined) throw failure;
+        return JSON.stringify({error: failure.error});
+    }
+}
 """
 
 OPEN_FINDER_WINDOW = """
@@ -120,9 +201,9 @@ def run(args, timeout=120, check=False, input=None):
     return proc
 
 
-def osascript(script, *args, language="AppleScript"):
+def osascript(script, *args, language="AppleScript", timeout=60):
     try:
-        return run(["osascript", "-l", language, "-e", script, *map(str, args)], timeout=60)
+        return run(["osascript", "-l", language, "-e", script, *map(str, args)], timeout=timeout)
     except subprocess.TimeoutExpired as error:
         # Only an Apple Event to another app waits on an Automation prompt. WINDOWS_JS sends none.
         target = re.search(r'tell application (?:id )?"([^"]+)"', script)
@@ -138,7 +219,7 @@ def osascript(script, *args, language="AppleScript"):
 # State: what this CLI started, so cleanup kills exactly that and nothing else.
 
 def load_state():
-    state = {"qlmanage": [], "finder_windows": [], "app": [], "host_app_opened": False}
+    state = {"qlmanage": [], "finder_windows": [], "app": []}
     if STATE.exists():
         state |= json.loads(STATE.read_text())
     return state
@@ -272,10 +353,10 @@ def windows():
 
 
 def wait_for(probe, timeout, interval=0.25):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         found = probe()
-        if found:
+        if found and time.monotonic() < deadline:
             return found
         time.sleep(interval)
     return None
@@ -434,29 +515,28 @@ def open_in_app(file, run_dir, settle):
     token = f"bql-{uuid.uuid4()}"
     png = run_dir / "app" / f"{file.name}.png"
     log = run_dir / "app-loads.ndjson"
-    instance = {}
+    instance = None
 
-    def find_instance():
-        if not instance and (pids := run(["pgrep", "-f", "--", token]).stdout.split()):
-            instance.update(pid=int(pids[0]), file=str(file), token=token)
-            track("app", instance)
-        return instance.get("pid")
+    def started():
+        nonlocal instance
+        if instance is None and (instance := find_instance(token)):
+            track("app", asdict(instance))
+        return instance
 
     def app_windows(pid):
         return [w for w in windows() if w["pid"] == pid and w["layer"] == 0]
 
     def shown():
         """The window titled with the file, or True once the instance has exited."""
-        pid = find_instance()
-        if pid is None:
+        if started() is None:
             return None
-        if not alive(pid):
+        if not running(instance):
             return True
         # Finder's hide-extension setting can drop the extension from the window title.
-        return next((w for w in app_windows(pid) if w.get("name") in (file.name, file.stem)), None)
+        return next((w for w in app_windows(instance.pid) if w.get("name") in (file.name, file.stem)), None)
 
     def result(problem):
-        return {"file": str(file), "png": None if problem else str(png), "pid": instance.get("pid"),
+        return {"file": str(file), "png": None if problem else str(png), "pid": instance and instance.pid,
                 "problem": problem}
 
     try:
@@ -470,9 +550,9 @@ def open_in_app(file, run_dir, settle):
             if proc.returncode != 0:
                 return result(f"open -n -a exited {proc.returncode}: {proc.stderr.strip()}")
             window = wait_for(shown, timeout=20)
-            pid = instance.get("pid")
-            if pid is None:
+            if instance is None:
                 return result("the app did not start within 20 s")
+            pid = instance.pid
             if window is True:
                 return result("the app exited before it showed a window")
             if not window:
@@ -484,26 +564,26 @@ def open_in_app(file, run_dir, settle):
                                   "this shell in System Settings > Privacy & Security")
                 return result(f"the app opened no window titled {file.name} within 20 s, only {titles}")
             # The window shows "Loading brushes…" until the load ends, which LoadBudget caps at 10 s plus 1 s of grace.
-            wait_for(lambda: check_stream() or load_ended(log, pid) or not alive(pid), timeout=15)
-            if alive(pid) and not load_ended(log, pid):
+            wait_for(lambda: check_stream() or load_ended(log, pid) or not running(instance), timeout=15)
+            if running(instance) and not load_ended(log, pid):
                 return result("the app did not finish loading the file within 15 s")
             time.sleep(settle)
             try:
                 capture(window["id"], png)
             except Fail:
-                if alive(pid):
+                if running(instance):
                     raise
                 return result("the app exited while it showed the file")
             return result(None)
     finally:
-        if (pid := find_instance()) is not None:
-            try:
-                os.kill(pid, 15)
-                if not wait_for(lambda: not alive(pid), timeout=5):
-                    os.kill(pid, 9)
-            except ProcessLookupError:
-                pass
-            untrack("app", instance)
+        if started() is not None:
+            with suppress(ProcessLookupError):
+                if running(instance):
+                    os.kill(instance.pid, 15)
+                    wait_for(lambda: not running(instance), timeout=5)
+                if running(instance):
+                    os.kill(instance.pid, 9)
+            untrack("app", asdict(instance))
 
 
 DRIVERS = {"qlmanage": preview_with_qlmanage, "finder": preview_with_finder}
@@ -545,6 +625,124 @@ def drive_previews(files, run_dir, settle, via):
         elif process and not (process["binary"] or "").startswith(str(APP)):
             result["problem"] = f"served by {process['binary']}, not the installed app. Run `bql doctor`."
     return [result for _, _, result in results]
+
+
+def ax(command, *args, timeout=60):
+    try:
+        proc = osascript(AX_JS, command, *args, language="JavaScript", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"error": f"Accessibility did not answer within {timeout:g} s"}
+    fix = "Run from a logged-in GUI session."
+    if proc.returncode != 0:
+        raise Fail(f"Cannot read the app through Accessibility: {proc.stderr.strip()}", fix)
+    try:
+        answer = json.loads(proc.stdout)
+    except ValueError:
+        answer = None
+    if not isinstance(answer, dict):
+        raise Fail(f"Accessibility answered {proc.stdout.strip()!r}, not a JSON object", fix)
+    return answer
+
+
+@dataclass(frozen=True)
+class Instance:
+    pid: int
+    start: int
+
+
+def process_start(pid):
+    info = ctypes.create_string_buffer(PROC_BSDINFO_SIZE)
+    if LIBPROC.proc_pidinfo(pid, PROC_PIDTBSDINFO, ctypes.c_uint64(0), info, PROC_BSDINFO_SIZE) == PROC_BSDINFO_SIZE:
+        # struct proc_bsdinfo ends with pbi_start_tvsec and pbi_start_tvusec.
+        seconds, microseconds = struct.unpack_from("=QQ", info, PROC_BSDINFO_SIZE - 16)
+        return seconds * 1_000_000 + microseconds
+    # ESRCH: the pid has exited, also while it waits to be reaped.
+    if ctypes.get_errno() != errno.ESRCH:
+        raise Fail(f"proc_pidinfo {pid} failed: {os.strerror(ctypes.get_errno())}", "Rerun.")
+    return None
+
+
+def process_arguments(pid):
+    mib, size = (ctypes.c_int * 3)(CTL_KERN, KERN_PROCARGS2, pid), ctypes.c_size_t(os.sysconf("SC_ARG_MAX"))
+    buffer = ctypes.create_string_buffer(size.value)
+    if LIBPROC.sysctl(mib, 3, buffer, ctypes.byref(size), None, ctypes.c_size_t(0)) != 0:
+        return []
+    # argc, the executable path padded with NULs, then argv and the environment.
+    argc, rest = int.from_bytes(buffer.raw[:4], sys.byteorder), buffer.raw[4:size.value]
+    return [os.fsdecode(arg) for arg in rest[rest.index(b"\0"):].lstrip(b"\0").split(b"\0")[:argc]]
+
+
+def find_instance(token):
+    executable = file_identity(APP / EXECUTABLES["app"])
+    for pid, (_, path) in process_table().items():
+        if executable and path and file_identity(path) == executable:
+            arguments, start = process_arguments(pid), process_start(pid)
+            if start and any(arguments[i:i + 2] == ["-BQLLaunch", token] for i in range(len(arguments))):
+                return Instance(pid, start)
+    return None
+
+
+def running(instance):
+    return process_start(instance.pid) == instance.start
+
+
+def ax_instance(instance, command, *args, deadline):
+    if not running(instance):
+        raise Fail(f"The app instance bql launched as pid {instance.pid} exited", APP_CRASH_FIX)
+    return ax(command, instance.pid, *args, timeout=max(deadline - time.monotonic(), 0))
+
+
+@contextmanager
+def app_instance(files):
+    token = f"bql-{uuid.uuid4()}"
+    run(["open", "-n", "-F", "-a", str(APP), *map(str, files), "--args", "-BQLLaunch", token], timeout=60, check=True)
+    instance = wait_for(lambda: find_instance(token), timeout=20)
+    if not instance:
+        raise Fail(f"{APP} did not start within 20 s", APP_CRASH_FIX)
+    track("app", asdict(instance))
+    try:
+        yield instance
+    except BaseException:
+        try:
+            end_instance(instance)
+        except Fail as error:
+            note(f"Ending app instance {instance.pid} failed too: {error.error}")
+        raise
+    end_instance(instance)
+
+
+def end_instance(instance):
+    if running(instance):
+        try:
+            quit = ax("quit", instance.pid, timeout=10)
+        except Fail as error:
+            quit = {"error": error.error}
+        if "error" in quit:
+            note(f"Quitting app instance {instance.pid} through Accessibility failed: {quit['error']}")
+    wait_for(lambda: not running(instance), timeout=10)
+    if running(instance):
+        with suppress(ProcessLookupError):
+            os.kill(instance.pid, 9)
+    untrack("app", asdict(instance))
+
+
+def read_step(name, instance, expected, ready):
+    deadline, since = time.monotonic() + APP_READ_SECONDS, 0
+    step = {"step": name, "pid": instance.pid, "settled": False, "expected": expected, "observed": None}
+
+    def settled():
+        nonlocal since
+        read = ax_instance(instance, "read", deadline=deadline)
+        now = time.monotonic()
+        if "error" not in read:
+            read |= {"windows": sorted(read["windows"]), "document_actions": sorted(read["document_actions"])}
+        if read != step["observed"] or "error" in read or not ready(read):
+            since = now
+        step["observed"] = read
+        return now - since >= APP_STABLE_SECONDS
+
+    step["settled"] = bool(wait_for(settled, timeout=APP_READ_SECONDS))
+    return step
 
 
 # Subcommands.
@@ -979,9 +1177,6 @@ def install(checkout, build_first):
     for name in PLUGINS.values():
         run(["pluginkit", "-a", str(app / f"Contents/PlugIns/{name}.appex")], check=True)
     run(["open", str(app)], check=True)
-    state = load_state()
-    state["host_app_opened"] = True
-    save_state(state)
     for kind in PLUGINS:
         run(["pluginkit", "-e", "use", "-i", f"{BUNDLE_ID}.{kind}"], check=True)
     steps.append("register")
@@ -1123,6 +1318,95 @@ def cmd_hostile(args):
                      **crash_fields, "results": rows}, failures)
 
 
+SETUP_WINDOW = "Brushes Quick Look"
+FILE_MENU = ["Open…", "Open Recent >", "-", "Close", "Close All", "-", "Share >"]
+APP_FIXTURES = ["zero_area_tip.abr", "ordered_set.brushset"]
+APP_STABLE_SECONDS = 3
+APP_READ_SECONDS = 20
+APP_CRASH_FIX = "Look for a new BrushesQuickLook crash report in ~/Library/Logs/DiagnosticReports."
+
+
+def shown(value):
+    return json.dumps(value, ensure_ascii=False)
+
+
+def showing(*titles):
+    return lambda read: set(titles) <= set(read["windows"])
+
+
+def case_launch(files):
+    with app_instance([]) as instance:
+        return [read_step("plain launch", instance, {"windows": [SETUP_WINDOW]}, showing(SETUP_WINDOW))]
+
+
+def case_files(files):
+    names = sorted(f.name for f in files)
+    with app_instance(files) as instance:
+        return [read_step("launch with files", instance, {"windows": names}, showing(*names))]
+
+
+def case_menu(files):
+    expected, document = {"file_menu": FILE_MENU}, files[-1]
+    with app_instance([]) as instance:
+        steps = [read_step("plain launch", instance, expected, showing(SETUP_WINDOW))]
+    with app_instance([document]) as instance:
+        steps.append(read_step("document open", instance, expected, showing(document.name)))
+        closed = ax_instance(instance, "close", document.name, deadline=time.monotonic() + 10)
+        if "error" in closed:
+            raise Fail(f"Cannot close {document.name} through Accessibility: {closed['error']}",
+                       "Run from a logged-in GUI session.")
+        steps.append(read_step("document closed", instance, expected,
+                               lambda read: document.name not in read["windows"]))
+    return steps
+
+
+def case_title(files):
+    document = files[-1]
+    with app_instance([document]) as instance:
+        return [read_step("document open", instance, {"document_actions": []}, showing(document.name))]
+
+
+APP_CASES = {
+    "launch": (case_launch, "A plain launch must show only the setup window. An extra `Open` window is the launch "
+                            "Open panel of macOS 14 (#114). Fix the launch in App/BrushesQuickLookApp.swift."),
+    "files": (case_files, "A launch with files must show only their document windows. A `Brushes Quick Look` window "
+                          "beside them is the setup window macOS 14 opens too (#115). Fix "
+                          "applicationDidFinishLaunching in App/BrushesQuickLookApp.swift."),
+    "menu": (case_menu, "The File menu must hold only Open…, Open Recent, Close, Close All and Share, also after a "
+                        "document window closes. Fix the File menu pruning in App/."),
+    "title": (case_title, "A document window's title must offer no rename, move, tags or lock (#113). AppKit adds "
+                          "the document actions button for them when the document class autosaves in place. Keep "
+                          "autosavesInPlace false in App/BrushesQuickLookApp.swift."),
+}
+
+
+def cmd_app(args):
+    if not APP.exists():
+        raise Fail(f"{APP} is missing", "Run `bql install`.")
+    if not ax("trusted").get("trusted"):
+        raise Fail("The process that runs bql has no Accessibility access, so it cannot read the app's windows and "
+                   "menus", "Turn on the app that runs this shell, such as Terminal, in System Settings > Privacy & "
+                   "Security > Accessibility, then rerun.")
+    files = [FIXTURES / "corpus" / name for name in APP_FIXTURES]
+    if not all(file.is_file() for file in files):
+        raise Fail(f"No fixtures in {FIXTURES / 'corpus'}", "Run `bql fixtures` first.")
+    run_dir = new_run("app")
+    cases, failures = [], []
+    for name in [args.case] if args.case else APP_CASES:
+        drive, fix = APP_CASES[name]
+        steps = drive(files)
+        cases.append({"case": name, "steps": steps})
+        for step in steps:
+            where, observed = f"{name}, {step['step']}", step["observed"]
+            if not step["settled"]:
+                failures.append((f"{where}: the step's state did not hold for {APP_STABLE_SECONDS} s within "
+                                 f"{APP_READ_SECONDS} s, last read {shown(observed)}", fix))
+                continue
+            failures += [(f"{where}: {key} {shown(observed[key])}, expected {shown(value)}", fix)
+                         for key, value in step["expected"].items() if observed[key] != value]
+    finish(run_dir, {"app": str(APP), "cases": cases}, failures)
+
+
 def cmd_logs(args):
     start = datetime.now() - timedelta(seconds=args.last)
     events = log_since(start, f'subsystem == "{BUNDLE_ID}"', signposts=True)
@@ -1164,31 +1448,27 @@ def cmd_logs(args):
 
 def cmd_cleanup(args):
     state = load_state()
-    killed, ended, closed = [], [], []
+    killed, ended, unverified, closed = [], [], [], []
     for record in state["qlmanage"]:
         command = run(["ps", "-p", str(record["pid"]), "-o", "command="]).stdout.strip()
         if command.startswith("qlmanage -p") and record["file"] in command:
             os.kill(record["pid"], 15)
             killed.append(record)
     for record in state["app"]:
-        # A pid that no longer carries the token is another process that reused it.
-        if record.get("token") and record["token"] in run(["ps", "-o", "command=", "-p", str(record["pid"])]).stdout:
-            try:
+        if "start" not in record:
+            unverified.append(record)
+        elif running(Instance(record["pid"], record["start"])):
+            with suppress(ProcessLookupError):
                 os.kill(record["pid"], 15)
                 ended.append(record)
-            except ProcessLookupError:
-                pass
     for window_id in state["finder_windows"]:
         if osascript(CLOSE_FINDER_WINDOW, window_id).stdout.strip() not in ("", "0"):
             closed.append(window_id)
-    quit_app = False
-    if state["host_app_opened"]:
-        quit_app = osascript(f'tell application id "{BUNDLE_ID}" to quit').returncode == 0
     shutil.rmtree(FIXTURES, ignore_errors=True)
     STATE.unlink(missing_ok=True)
     runs = sorted(p.name for p in EVIDENCE.iterdir()) if EVIDENCE.is_dir() else []
-    emit({"ok": True, "killed_qlmanage": killed, "ended_app_instances": ended, "closed_finder_windows": closed,
-          "quit_host_app": quit_app, "removed": str(FIXTURES), "evidence_dir": str(EVIDENCE), "evidence_runs_kept": runs})
+    emit({"ok": True, "killed_qlmanage": killed, "ended_app_instances": ended, "unverified_app_records": unverified,
+          "closed_finder_windows": closed, "removed": str(FIXTURES), "evidence_dir": str(EVIDENCE), "evidence_runs_kept": runs})
 
 
 def main():
@@ -1223,6 +1503,9 @@ def main():
     hostile.add_argument("paths", nargs="*", help=f"files or folders (default: the fixture corpus and ${REAL_FILES_ENV})")
     hostile.add_argument("--via", choices=sorted(DRIVERS), default="qlmanage", help="preview driver (default qlmanage)")
     hostile.add_argument("--settle", type=float, default=2, help="seconds to wait after the window appears")
+    app = sub.add_parser("app", help=f"launch {APP} in new instances, read its windows and File menu through "
+                         "Accessibility and compare them with each case's expected state")
+    app.add_argument("--case", choices=list(APP_CASES), help="run one case (default: all)")
     logs = sub.add_parser("logs", help="per-load read/parse/tips intervals and extension log messages from the unified log")
     logs.add_argument("--last", type=float, default=300, help="seconds of log to read (default 300)")
     sub.add_parser("cleanup", help="kill the qlmanage, app instances and Finder windows bql started, delete fixtures, "

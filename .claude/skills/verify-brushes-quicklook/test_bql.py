@@ -2,6 +2,7 @@ import ast
 import ctypes
 import dataclasses
 import errno
+import functools
 import importlib.machinery
 import importlib.util
 import io
@@ -10,15 +11,20 @@ import os
 import plistlib
 import re
 import shutil
+import signal
+import struct
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import uuid
+from collections import Counter
 from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, Set, Tuple
+from typing import Dict, List, Set, Tuple
 from unittest import mock
 
 loader = importlib.machinery.SourceFileLoader("bql", str(Path(__file__).with_name("bql")))
@@ -354,12 +360,16 @@ class ExitContractTest(unittest.TestCase):
 class OpenInAppTest(unittest.TestCase):
     START = 1_800_000_000
 
-    def open(self, dies=False, load=("begin", "end")):
+    def open(self, dies=False, load=("begin", "end"), taken=False):
         """Pid 100 is an instance that ran before. `open` starts 200, the new instance, and 300, an instance of the
         same app that someone else starts during the call. Only 200 has the token, and 300 starts a load too."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        running, signals, launched, now = {100}, [], {}, [self.START]
+        app = Path(tmp.name) / "BrushesQuickLook.app"
+        executable = str(app / "Contents/MacOS/BrushesQuickLook")
+        Path(executable).parent.mkdir(parents=True)
+        Path(executable).write_bytes(b"")
+        processes, signals, launched, now = {100: FakeProcess(executable, [executable])}, [], {}, [self.START]
 
         @contextmanager
         def log_stream(log, *args):
@@ -368,51 +378,52 @@ class OpenInAppTest(unittest.TestCase):
 
         def run(args, timeout=120, check=False):
             if args[0] == "open":
-                launched["token"] = args[-1]
-                running.update({200, 300})
+                processes[200] = FakeProcess(executable, [executable, *args[args.index("--args") + 1:]], 2)
+                processes[300] = FakeProcess(executable, [executable, "-BQLLaunch", "bql-other"], 3)
                 events = [(300, "begin"), *((200, kind) for kind in load)]
                 launched["log"].write_text("".join(
                     json.dumps({"processID": pid, "signpostName": "load", "signpostType": kind}) + "\n"
                     for pid, kind in events))
-            if args[0] == "pgrep":
-                return SimpleNamespace(stdout="200\n" if args[-1] == launched.get("token") and 200 in running else "")
             return SimpleNamespace(returncode=0, stderr="")
 
         def sleep(seconds):
             now[0] += seconds
             if dies:
-                running.discard(200)
+                processes.pop(200, None)
 
         def kill(pid, signal):
-            if signal:
-                signals.append((pid, signal))
-            if pid not in running:
+            signals.append((pid, signal))
+            if pid not in processes:
                 raise ProcessLookupError(pid)
-            if signal:
-                running.discard(pid)
+            del processes[pid]
 
         def windows():
             return [w for w in [{"id": 1, "pid": 100, "layer": 0, "name": "Brushes Quick Look"},
-                                {"id": 7, "pid": 200, "layer": 0, "name": "a"}] if w["pid"] in running]
+                                {"id": 7, "pid": 200, "layer": 0, "name": "a"}] if w["pid"] in processes]
 
-        def vanished(window_id, png):
-            raise bql.Fail("screencapture failed: could not create image from window", "")
+        def captured(window_id, png):
+            if 200 not in processes:
+                raise bql.Fail("screencapture failed: could not create image from window", "")
+            if taken:
+                processes[200] = dataclasses.replace(processes[200], start=9)
 
-        capture = mock.Mock(side_effect=lambda window_id, png: 200 in running or vanished(window_id, png))
-        clock = SimpleNamespace(time=lambda: now[0], sleep=sleep)
-        with mock.patch.multiple(bql, run=run, windows=windows, capture=capture, log_stream=log_stream, time=clock,
+        clock = SimpleNamespace(time=lambda: now[0], monotonic=lambda: now[0], sleep=sleep)
+        with mock.patch.multiple(bql, run=run, windows=windows, capture=captured, log_stream=log_stream, time=clock,
+                                 APP=app, LIBPROC=FakeKernel(lambda: processes),
                                  WORK=Path(tmp.name), STATE=Path(tmp.name) / "state.json"), \
                 mock.patch.object(bql.os, "kill", kill):
             result = bql.open_in_app(Path(tmp.name) / "a.abr", Path(tmp.name), 2)
             state = bql.load_state()
-        return result, signals, running, state["app"], now[0] - self.START
+        return result, signals, set(processes), state["app"], now[0] - self.START
 
     def test_it_ends_only_the_instance_it_started_and_reports_one_that_died_while_showing_the_file(self):
-        for dies, problem in ((False, None), (True, "the app exited while it showed the file")):
-            with self.subTest(dies=dies):
-                result, signals, running, tracked, _ = self.open(dies)
-                self.assertEqual((result["pid"], result["problem"], bool(result["png"])), (200, problem, not dies))
-                self.assertEqual((signals, running, tracked), ([(200, 15)], {100, 300}, []))
+        rows = [({}, None, [(200, 15)], {100, 300}), ({"taken": True}, None, [], {100, 200, 300}),
+                ({"dies": True}, "the app exited while it showed the file", [], {100, 300})]
+        for options, problem, signals, left in rows:
+            with self.subTest(**options):
+                result, sent, running, tracked, _ = self.open(**options)
+                self.assertEqual((result["pid"], result["problem"], bool(result["png"])), (200, problem, not problem))
+                self.assertEqual((sent, running, tracked), (signals, left, []))
 
     def test_a_load_that_never_ends_is_a_problem_after_15_s(self):
         result, signals, _, _, elapsed = self.open(load=("begin", "begin", "end"))
@@ -420,23 +431,469 @@ class OpenInAppTest(unittest.TestCase):
                          ("the app did not finish loading the file within 15 s", None, 15, [(200, 15)]))
 
 
+SETUP, OPEN_PANEL, ABR, BRUSHSET = "Brushes Quick Look", "Open", "zero_area_tip.abr", "ordered_set.brushset"
+MENU = ["Open…", "Open Recent >", "-", "Close", "Close All", "-", "Share >"]
+UNPRUNED_MENU = ["New", "Open…", "Open Recent >", "-", "Close", "Close All", "Save", "Save As…", "Duplicate",
+                 "Rename…", "Move To…", "Revert To >", "-", "Share >"]
+OTHER_PID = 100
+OTHER_APP = "/Applications/Other.app/Contents/MacOS/Other"
+
+FAKE_AX = """
+let tree;
+const fake = Object.assign(value => value, {
+    AXIsProcessTrusted: () => tree.trusted,
+    AXUIElementCreateApplication: () => tree.app,
+    AXUIElementCopyAttributeValue: (element, name, value) => {
+        const code = element.faults[name] || (name in element.attributes ? 0 : -25205);
+        const found = element.attributes[name];
+        if (code === 0) value[0] = Array.isArray(found) ? {count: found.length, objectAtIndex: i => found[i]} : found;
+        return code;
+    },
+    AXUIElementPerformAction: (element, action) => {
+        const code = element.faults[action] || 0;
+        if (code === 0) console.log(`pressed ${element.label}`);
+        return code;
+    },
+});
+const reader = (function ($, ObjC, Ref) {
+READER
+    return run;
+})(fake, {import() {}, bindFunction() {}, unwrap: value => value}, () => []);
+function run([json, ...args]) {
+    tree = JSON.parse(json);
+    return reader(args);
+}
+"""
+
+
+@functools.lru_cache(maxsize=None)
+def evaluate_ax(script, tree, *args):
+    proc = subprocess.run(["osascript", "-l", "JavaScript", "-e", FAKE_AX.replace("READER", script), tree, *args],
+                          capture_output=True, text=True, timeout=30)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def ax_read(windows, file_menu=MENU, document_actions=()):
+    return {"windows": list(windows), "file_menu": file_menu, "document_actions": list(document_actions)}
+
+
+def ax_tree(state, faults, quit="Quit"):
+    def element(label, absent=(), **attributes):
+        return {"label": label, "attributes": attributes,
+                "faults": {**{name: -25212 for name in absent},
+                           **{name: code for (target, name), code in faults.items() if target == label}}}
+
+    def window(title):
+        children = [element(f"close button of {title}", AXDescription="close button"), element(f"text of {title}")]
+        if title in state["document_actions"]:
+            children.append(element(f"document actions of {title}", AXDescription="document actions"))
+        return element(f"window {title}", AXTitle=title, AXChildren=children, AXCloseButton=element(f"close {title}"))
+
+    def item(entry):
+        return element(f"item {entry}", AXTitle="" if entry == "-" else entry.removesuffix(" >"),
+                       AXChildren=[element(f"submenu {entry}")] if entry.endswith(" >") else [])
+
+    app_menu = element("app menu", AXChildren=[
+        element("item About", AXTitle="About BrushesQuickLook", AXIdentifier="orderFrontStandardAboutPanel:"),
+        element("item separator", absent=["AXIdentifier"], AXTitle=""),
+        element(quit, AXTitle="Quit BrushesQuickLook", AXIdentifier="terminate:")])
+    menus = [element("Apple", AXTitle="Apple", AXChildren=[element("Apple menu", AXChildren=[])]),
+             element("BrushesQuickLook", AXTitle="BrushesQuickLook", AXChildren=[app_menu])]
+    if state["file_menu"] is not None:
+        menus.append(element("File", AXTitle="File", AXChildren=[
+            element("File menu", AXChildren=[item(entry) for entry in state["file_menu"]])]))
+    return element("app", AXWindows=[window(title) for title in state["windows"]],
+                   AXMenuBar=element("menu bar", AXChildren=[*menus, element("Window", AXTitle="Window")]))
+
+
+def instance(*reads, after_close=()):
+    return {"open": list(reads), "closed": list(after_close)}
+
+
+DECOYS = {
+    "the token with a suffix": lambda app, token: FakeProcess(app, [app, "-BQLLaunch", f"{token}-suffix"]),
+    "the token after another flag": lambda app, token: FakeProcess(app, [app, "-BQLLaunch", "bql-x", "--note", token]),
+    "another executable with the exact token":
+        lambda app, token: FakeProcess(sys.executable, [sys.executable, "-BQLLaunch", token]),
+    "the token only in the environment": lambda app, token: FakeProcess(app, [app, "-BQLLaunch"], env=[token]),
+}
+
+
+class FakeAppInstances:
+    def __init__(self, launches, trusted=True, starts=True, quits=True, faults=(), broken=(), garbled=(), delays=(),
+                 errors=(), pid_taken=None, decoys=(), wall_clock=1):
+        self.launches, self.trusted, self.starts, self.quits = launches, trusted, starts, quits
+        self.faults, self.broken, self.garbled, self.delays = dict(faults), set(broken), set(garbled), dict(delays)
+        self.errors = dict(errors)
+        self.pid_taken, self.decoys, self.wall_clock = pid_taken, decoys, wall_clock
+        self.launched, self.actions, self.unrelated, self.quit_at, self.calls = [], [], [], {}, Counter()
+        self.processes = {OTHER_PID: FakeProcess(OTHER_APP, [OTHER_APP])}
+        self.libproc = FakeKernel(lambda: self.processes)
+        self.libproc.proc_pidinfo = self.pidinfo
+        self.ax_calls, self.now = [], 0.0
+
+    def run(self, args, timeout=120, check=False):
+        if args[0] != "open":
+            raise AssertionError(f"unexpected command {args}")
+        executable, token = f"{args[4]}/Contents/MacOS/BrushesQuickLook", args[-1]
+        pid = 201 + len(self.launched)
+        for i, decoy in enumerate(self.decoys):
+            self.processes[101 + 10 * len(self.launched) + i] = decoy(executable, token)
+        process = FakeProcess(executable, [executable, *args[args.index("--args") + 1:]], 1000 + pid)
+        self.launched.append({"pid": pid, "args": list(map(str, args)), "process": process, "phase": "open",
+                              "reads": 0, **self.launches[len(self.launched)]})
+        if self.starts:
+            self.processes[pid] = process
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def pidinfo(self, *args):
+        self.calls["proc_pidinfo"] += 1
+        call = ("proc_pidinfo", self.calls["proc_pidinfo"])
+        self.now += self.delays.get(call, 0)
+        if call in self.errors:
+            ctypes.set_errno(self.errors[call])
+            return 0
+        return FakeKernel.proc_pidinfo(self.libproc, *args)
+
+    def ours(self, pid):
+        return next((i for i in self.launched if i["pid"] == pid and self.processes.get(pid) is i["process"]), None)
+
+    def osascript(self, script, *args, language="AppleScript", timeout=60):
+        command, pid = args[0], int(args[1]) if len(args) > 1 else None
+        self.calls[command] += 1
+        if pid in self.processes and not self.ours(pid):
+            self.unrelated.append((command, pid))
+        tree = {"trusted": self.trusted} if pid is None else {"app": self.tree(pid, command == "read")}
+        returncode, stdout, stderr = evaluate_ax(script, json.dumps(tree), *map(str, args))
+        delay = self.delays.get((command, self.calls[command]), 0)
+        self.now += min(delay, timeout)
+        if command == "quit":
+            self.quit_at[pid], self.checks_before_quit = self.now, self.calls["proc_pidinfo"]
+        if delay > timeout:
+            raise subprocess.TimeoutExpired(["osascript"], timeout)
+        if command in self.broken:
+            return SimpleNamespace(returncode=1, stdout="", stderr=f"execution error: {command} broke (-2700)")
+        if command in self.garbled:
+            return SimpleNamespace(returncode=0, stdout="not json\n", stderr="")
+        for line in stderr.splitlines():
+            if line.startswith("pressed "):
+                self.press(pid, line[len("pressed "):])
+        if pid is not None:
+            self.ax_calls.append((command, pid))
+            if self.pid_taken and self.pid_taken[0] == len(self.ax_calls):
+                self.take_pid(pid)
+        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+    def tree(self, pid, read):
+        launched = self.ours(pid)
+        if launched is None:
+            return ax_tree(ax_read([BRUSHSET]), {})
+        launched["reads"] += read
+        reads = launched[launched["phase"]]
+        return ax_tree(reads[min(max(launched["reads"], 1), len(reads)) - 1], self.faults)
+
+    def press(self, pid, label):
+        launched = self.ours(pid)
+        if launched is None:
+            return
+        if label == "Quit":
+            self.actions.append(("quit", pid))
+            if self.quits:
+                del self.processes[pid]
+        else:
+            launched["phase"], launched["reads"] = "closed", 0
+            self.actions.append(("close", pid, label[len("close "):]))
+
+    def take_pid(self, pid):
+        launched = next(i for i in self.launched if i["pid"] == pid)
+        self.processes[pid], self.pid_taken = dataclasses.replace(launched["process"], **self.pid_taken[1]), None
+
+    def kill(self, pid, signal):
+        if pid not in self.processes:
+            raise ProcessLookupError(pid)
+        if self.ours(pid):
+            self.actions.append(("kill", pid, signal, self.now - self.quit_at[pid] if pid in self.quit_at else None))
+        else:
+            self.unrelated.append(("kill", pid, signal))
+        del self.processes[pid]
+
+    def sleep(self, seconds):
+        self.now += seconds
+        if self.now > 600:
+            raise AssertionError("the fake clock ran past 600 s")
+        for pid, quit_at in list(self.quit_at.items()):
+            if self.pid_taken and self.pid_taken[0] == "as the wait ends" and self.now - quit_at >= 10:
+                self.take_pid(pid)
+
+
+class AppTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.app, self.corpus = self.dir / "BrushesQuickLook.app", self.dir / "fixtures/corpus"
+        (self.app / "Contents/MacOS").mkdir(parents=True)
+        (self.app / "Contents/MacOS/BrushesQuickLook").write_bytes(b"")
+        self.corpus.mkdir(parents=True)
+        for name in (ABR, BRUSHSET):
+            (self.corpus / name).write_bytes(b"")
+
+    def run_app(self, fake, *argv):
+        self.work = Path(tempfile.mkdtemp(dir=self.dir))
+        clock = SimpleNamespace(time=lambda: fake.wall_clock * fake.now, monotonic=lambda: fake.now, sleep=fake.sleep)
+        stubs = {"osascript": fake.osascript, "run": fake.run, "LIBPROC": fake.libproc, "time": clock,
+                 "APP": self.app, "FIXTURES": self.dir / "fixtures", "WORK": self.work,
+                 "STATE": self.work / "state.json",
+                 "new_run": lambda name: Path(tempfile.mkdtemp(dir=self.work))}
+        with mock.patch.object(bql.os, "kill", fake.kill):
+            return run_bql("app", *argv, **stubs)
+
+    def tracked(self):
+        return json.loads((self.work / "state.json").read_text())["app"]
+    def test_each_case_fails_on_the_reads_recorded_from_its_defect_with_the_exact_mismatch(self):
+        menu_error = ". ".join(f"menu, {step}: file_menu {json.dumps(UNPRUNED_MENU, ensure_ascii=False)}, "
+                               f"expected {json.dumps(MENU, ensure_ascii=False)}"
+                               for step in ("plain launch", "document open", "document closed"))
+        rows = [
+            ("launch", "cc91bcf on macOS 14.8.7, the launch Open panel (#114)",
+             [instance(ax_read([]), ax_read([SETUP, OPEN_PANEL]))],
+             'launch, plain launch: windows ["Brushes Quick Look", "Open"], expected ["Brushes Quick Look"]'),
+            ("files", "cc91bcf on macOS 14.8.7, the setup window that stays beside the documents (#115)",
+             [instance(ax_read([SETUP]), ax_read([SETUP, BRUSHSET, ABR]))],
+             'files, launch with files: windows ["Brushes Quick Look", "ordered_set.brushset", "zero_area_tip.abr"], '
+             'expected ["ordered_set.brushset", "zero_area_tip.abr"]'),
+            ("menu", "8cca07a^ on macOS 26.6.2, the unpruned File menu (#104)",
+             [instance(ax_read([SETUP], UNPRUNED_MENU)),
+              instance(ax_read([BRUSHSET], UNPRUNED_MENU), after_close=[ax_read([], UNPRUNED_MENU)])],
+             menu_error),
+            ("title", "9327861 on macOS 14.8.7, the title's document actions button (#113)",
+             [instance(ax_read([BRUSHSET], document_actions=[BRUSHSET]))],
+             'title, document open: document_actions ["ordered_set.brushset"], expected []'),
+        ]
+        for case, recorded, launches, error in rows:
+            with self.subTest(recorded):
+                code, result = self.run_app(FakeAppInstances(launches), "--case", case)
+                self.assertEqual((code, result["error"]), (1, error))
+
+    def test_a_clean_run_launches_each_instance_fresh_and_ends_only_those_instances(self):
+        fake = FakeAppInstances([
+            instance(ax_read([]), ax_read([SETUP])),
+            instance(ax_read([BRUSHSET]), ax_read([BRUSHSET, ABR])),
+            instance(ax_read([SETUP])),
+            instance(ax_read([BRUSHSET]), after_close=[ax_read([BRUSHSET]), ax_read([])]),
+            instance(ax_read([BRUSHSET])),
+        ])
+        code, result = self.run_app(fake)
+        self.assertEqual((code, [case["case"] for case in result["cases"]]), (0, ["launch", "files", "menu", "title"]))
+        self.assertEqual(fake.actions, [("quit", 201), ("quit", 202), ("quit", 203), ("close", 204, BRUSHSET),
+                                        ("quit", 204), ("quit", 205)])
+        self.assertEqual(set(fake.processes), {OTHER_PID})
+        abr, brushset = str(self.corpus / ABR), str(self.corpus / BRUSHSET)
+        self.assertEqual([launch["args"][:-1] for launch in fake.launched], [
+            ["open", "-n", "-F", "-a", str(self.app), *files, "--args", "-BQLLaunch"]
+            for files in ([], [abr, brushset], [], [brushset], [brushset])])
+        self.assertEqual(self.tracked(), [])
+
+    def test_a_step_waits_until_every_window_it_expects_shows(self):
+        later = [ax_read([OPEN_PANEL], UNPRUNED_MENU)] * 16
+        rows = [
+            ("launch", [instance(*later, ax_read([SETUP]))]),
+            ("files", [instance(*[ax_read([ABR])] * 16, ax_read([ABR, BRUSHSET]))]),
+            ("menu", [instance(*later, ax_read([SETUP])), instance(ax_read([BRUSHSET]), after_close=[ax_read([])])]),
+        ]
+        for case, launches in rows:
+            with self.subTest(case):
+                code, result = self.run_app(FakeAppInstances(launches), "--case", case)
+                self.assertEqual((code, result.get("error")), (0, None))
+
+    def test_a_failed_ax_read_makes_the_read_incomplete_so_the_step_never_passes(self):
+        sites = [("app", "AXWindows", -25204), ("app", "AXMenuBar", -25200), ("menu bar", "AXChildren", -25200),
+                 ("Apple", "AXTitle", -25200), ("BrushesQuickLook", "AXTitle", -25200), ("File", "AXTitle", -25200),
+                 ("File", "AXChildren", -25200), ("File menu", "AXChildren", -25200),
+                 ("item Save", "AXTitle", -25200), ("item Close", "AXChildren", -25200),
+                 ("window Open", "AXTitle", -25200), ("window Open", "AXTitle", -25202),
+                 ("window ordered_set.brushset", "AXChildren", -25200),
+                 ("text of ordered_set.brushset", "AXDescription", -25200)]
+        state = ax_read([BRUSHSET, OPEN_PANEL], [*MENU, "Save"])
+        code, _ = self.run_app(FakeAppInstances([instance(state)]), "--case", "title")
+        self.assertEqual(code, 0)
+        for label, attribute, error in sites:
+            with self.subTest(f"{attribute} of {label} fails with {error}"):
+                fake = FakeAppInstances([instance(state)], faults={(label, attribute): error})
+                code, result = self.run_app(fake, "--case", "title")
+                self.assertEqual((code, result["error"]), (1, (
+                    "title, document open: the step's state did not hold for 3 s within 20 s, last read "
+                    f'{{"error": "{attribute} failed with AX error {error}"}}')))
+
+    def test_a_file_menu_item_that_the_app_already_removed_is_left_out(self):
+        with_save = [*MENU, "Save"]
+        launches = [instance(ax_read([SETUP], with_save)),
+                    instance(ax_read([BRUSHSET], with_save), after_close=[ax_read([], with_save)])]
+        code, _ = self.run_app(FakeAppInstances(launches), "--case", "menu")
+        self.assertEqual(code, 1)
+        for attribute in ("AXTitle", "AXChildren"):
+            with self.subTest(attribute):
+                fake = FakeAppInstances(launches, faults={("item Save", attribute): -25202})
+                code, result = self.run_app(fake, "--case", "menu")
+                self.assertEqual((code, result.get("error")), (0, None))
+
+    def test_a_close_that_fails_through_accessibility_exits_2_and_still_quits_the_instance(self):
+        rows = [({"faults": {(f"window {BRUSHSET}", "AXCloseButton"): -25200}},
+                 f"Cannot close {BRUSHSET} through Accessibility: AXCloseButton failed with AX error -25200"),
+                ({"faults": {(f"close {BRUSHSET}", "AXPress"): -25200}},
+                 f"Cannot close {BRUSHSET} through Accessibility: AXPress failed with AX error -25200"),
+                ({"garbled": ["close"]}, "Accessibility answered 'not json', not a JSON object")]
+        for close, error in rows:
+            with self.subTest(error):
+                fake = FakeAppInstances([instance(ax_read([SETUP])), instance(ax_read([BRUSHSET]))], **close)
+                code, result = self.run_app(fake, "--case", "menu")
+                self.assertEqual((code, result["error"], set(fake.processes)), (2, error, {OTHER_PID}))
+
+    def test_a_state_that_never_holds_for_3_s_fails_with_the_last_read(self):
+        flapping = [ax_read([SETUP]), ax_read([SETUP, OPEN_PANEL])] * 100
+        code, result = self.run_app(FakeAppInstances([instance(*flapping)]), "--case", "launch")
+        [step] = result["cases"][0]["steps"]
+        self.assertEqual((code, step["settled"]), (1, False))
+        self.assertIn(step["observed"], [ax_read([SETUP]), ax_read([SETUP, OPEN_PANEL])])
+        self.assertEqual(result["error"], "launch, plain launch: the step's state did not hold for 3 s within 20 s, "
+                                          f"last read {json.dumps(step['observed'], ensure_ascii=False)}")
+
+    def test_a_read_that_runs_past_the_20_s_limit_never_passes(self):
+        rows = [({("read", 1): 30}, 20, 20.25), ({("read", 2): 30}, 19.75, 20.25),
+                ({("proc_pidinfo", 2): 30, ("read", 1): 600}, 0, 30.25)]
+        for delays, waited, elapsed in rows:
+            with self.subTest(delays=delays):
+                fake = FakeAppInstances([instance(ax_read([SETUP]))], delays=delays)
+                code, result = self.run_app(fake, "--case", "launch")
+                self.assertEqual((code, result.get("error"), fake.now), (1, (
+                    "launch, plain launch: the step's state did not hold for 3 s within 20 s, last read "
+                    f'{{"error": "Accessibility did not answer within {waited:g} s"}}'), elapsed))
+
+    def test_a_document_window_that_stays_open_after_the_close_fails_the_closed_step(self):
+        fake = FakeAppInstances([instance(ax_read([SETUP])),
+                                 instance(ax_read([BRUSHSET]), after_close=[ax_read([BRUSHSET])])])
+        code, result = self.run_app(fake, "--case", "menu")
+        self.assertEqual((code, result["error"]), (1, "menu, document closed: the step's state did not hold for 3 s "
+                                                      "within 20 s, last read "
+                                                      + json.dumps(ax_read([BRUSHSET]), ensure_ascii=False)))
+
+    def test_an_instance_whose_quit_is_ignored_or_fails_is_killed_10_s_later(self):
+        rows = [("ignored", {"quits": False}),
+                ("pressing Quit fails", {"faults": {("Quit", "AXPress"): -25200}}),
+                ("the app menu cannot be read", {"faults": {("app menu", "AXChildren"): -25200}}),
+                ("the Quit item cannot be read", {"faults": {("Quit", "AXIdentifier"): -25200}}),
+                ("osascript fails", {"broken": ["quit"]}),
+                ("osascript prints no JSON", {"garbled": ["quit"]}),
+                ("osascript hangs", {"delays": {("quit", 1): 600}}),
+                ("the wall clock runs backwards", {"quits": False, "wall_clock": -1})]
+        for name, quit in rows:
+            with self.subTest(name):
+                fake = FakeAppInstances([instance(ax_read([SETUP]))], **quit)
+                code, _ = self.run_app(fake, "--case", "launch")
+                self.assertEqual((code, fake.actions[-1], set(fake.processes), self.tracked()),
+                                 (0, ("kill", 201, 9, 10), {OTHER_PID}, []))
+
+    def test_a_read_that_cannot_run_keeps_its_error_when_the_quit_fails_too(self):
+        broken = "Cannot read the app through Accessibility: execution error: read broke (-2700)"
+        garbled = "Accessibility answered 'not json', not a JSON object"
+        rows = [({"broken": ["read", "quit"]}, broken), ({"broken": ["read"], "garbled": ["quit"]}, broken),
+                ({"garbled": ["read", "quit"]}, garbled)]
+        for failures, error in rows:
+            with self.subTest(**failures):
+                fake = FakeAppInstances([instance(ax_read([SETUP]))], **failures)
+                code, result = self.run_app(fake, "--case", "launch")
+                self.assertEqual((code, result["error"], fake.actions, set(fake.processes), self.tracked()),
+                                 (2, error, [("kill", 201, 9, 10)], {OTHER_PID}, []))
+
+    def test_no_read_action_or_signal_reaches_a_process_that_took_the_instance_pid(self):
+        launches = [instance(ax_read([SETUP])), instance(ax_read([BRUSHSET]), after_close=[ax_read([])])]
+        clean = FakeAppInstances(launches)
+        self.assertEqual(self.run_app(clean, "--case", "menu")[0], 0)
+        for call, (command, pid) in enumerate(clean.ax_calls, 1):
+            with self.subTest(f"another process takes pid {pid} after AX call {call}, {command}"):
+                fake = FakeAppInstances(launches, pid_taken=(call, {"start": 0}))
+                code, result = self.run_app(fake, "--case", "menu")
+                only_quit_left = [c for c, p in clean.ax_calls[call:] if p == pid][:1] in ([], ["quit"])
+                ended = (0, None) if only_quit_left else (2, f"The app instance bql launched as pid {pid} exited")
+                self.assertEqual((code, result.get("error"), fake.unrelated, self.tracked()), (*ended, [], []))
+        with self.subTest("another process takes the pid as the quit wait ends"):
+            fake = FakeAppInstances([instance(ax_read([SETUP]))], quits=False,
+                                    pid_taken=("as the wait ends", {"start": 0}))
+            code, _ = self.run_app(fake, "--case", "launch")
+            self.assertEqual((code, fake.unrelated, self.tracked()), (0, [], []))
+
+    def test_only_the_installed_app_launched_with_the_exact_token_is_the_instance(self):
+        launches = [instance(ax_read([SETUP])), instance(ax_read([BRUSHSET]), after_close=[ax_read([])])]
+        for name, decoy in DECOYS.items():
+            with self.subTest(name):
+                fake = FakeAppInstances(launches, quits=False, decoys=[decoy])
+                code, result = self.run_app(fake, "--case", "menu")
+                self.assertEqual((code, result.get("error"), fake.unrelated, set(fake.processes)),
+                                 (0, None, [], {OTHER_PID, 101, 111}))
+                self.assertEqual(fake.actions, [("quit", 201), ("kill", 201, 9, 10), ("close", 202, BRUSHSET),
+                                                ("quit", 202), ("kill", 202, 9, 10)])
+
+    def test_an_instance_whose_start_cannot_be_read_exits_2_stays_tracked_and_keeps_an_earlier_error(self):
+        clean = FakeAppInstances([instance(ax_read([SETUP]))])
+        self.run_app(clean, "--case", "launch")
+        unreadable = "proc_pidinfo 201 failed: Operation not permitted"
+        at_wait_end = {"quits": False, "pid_taken": ("as the wait ends", {"error": errno.EPERM})}
+        rows = [("as the quit wait ends", at_wait_end, unreadable),
+                ("once, just before the quit", {"errors": {("proc_pidinfo", clean.checks_before_quit): errno.EPERM}},
+                 unreadable),
+                ("after a read that cannot run", {**at_wait_end, "broken": ["read"]},
+                 "Cannot read the app through Accessibility: execution error: read broke (-2700)")]
+        for name, options, error in rows:
+            with self.subTest(name):
+                fake = FakeAppInstances([instance(ax_read([SETUP]))], **options)
+                code, result = self.run_app(fake, "--case", "launch")
+                self.assertEqual((code, result.get("error"), fake.unrelated, set(fake.processes), self.tracked()),
+                                 (2, error, [], {OTHER_PID, 201}, [{"pid": 201, "start": 1201}]))
+
+    def test_an_app_not_found_within_20_s_fails_even_if_found_later_or_the_wall_clock_runs_backwards(self):
+        late = {("proc_pidinfo", 1): 30}
+        for options, elapsed in (({"starts": False, "wall_clock": -1}, 20), ({"delays": late}, 30.25)):
+            with self.subTest(**options):
+                fake = FakeAppInstances([instance(ax_read([SETUP]))], **options)
+                code, result = self.run_app(fake, "--case", "launch")
+                self.assertEqual((code, result.get("error"), fake.now, fake.calls["read"]),
+                                 (2, f"{self.app} did not start within 20 s", elapsed, 0))
+
+    def test_without_accessibility_it_exits_2_naming_the_settings_pane_and_launches_nothing(self):
+        fake = FakeAppInstances([], trusted=False)
+        code, result = self.run_app(fake)
+        self.assertEqual((code, fake.launched), (2, []))
+        self.assertIn("System Settings > Privacy & Security > Accessibility", result["fix"])
+        fake = FakeAppInstances([], garbled=["trusted"])
+        code, result = self.run_app(fake)
+        self.assertEqual((code, result["error"], fake.launched),
+                         (2, "Accessibility answered 'not json', not a JSON object", []))
+
+
 class CleanupTest(unittest.TestCase):
-    def test_it_ends_a_tracked_app_instance_only_while_its_pid_still_has_the_token(self):
+    def test_it_ends_instances_whose_pid_keeps_their_start_lists_older_records_and_keeps_unreadable_ones(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         work = Path(tmp.name)
-        mine = {"pid": 200, "file": "a.abr", "token": "bql-a"}
-        reused = {"pid": 300, "file": "b.abr", "token": "bql-b"}
-        (work / "state.json").write_text(json.dumps({"app": [mine, reused]}))
-        executable = bql.APP / "Contents/MacOS/BrushesQuickLook"
-        commands = {"200": f"{executable} -ApplePersistenceIgnoreState YES -BQLLaunch bql-a\n",
-                    "300": f"{executable} -ApplePersistenceIgnoreState YES -BQLLaunch bql-c\n"}
-        signals = []
-        with mock.patch.object(bql.os, "kill", lambda pid, signal: signals.append((pid, signal))):
-            code, result = run_bql("cleanup", run=lambda args, **kwargs: SimpleNamespace(stdout=commands[args[-1]]),
-                                   WORK=work, STATE=work / "state.json", FIXTURES=work / "fixtures",
-                                   EVIDENCE=work / "evidence")
-        self.assertEqual((code, signals, result["ended_app_instances"]), (0, [(200, 15)], [mine]))
+        app = str(work / "BrushesQuickLook.app/Contents/MacOS/BrushesQuickLook")
+        processes = {pid: FakeProcess(app, [app, "-BQLLaunch", f"bql-{pid}"], start, error=error)
+                     for pid, start, error in ((200, 2, 0), (201, 7, 0), (202, 3, 0), (204, 5, errno.EPERM))}
+        signals, commands = [], []
+
+        def cleanup(records):
+            (work / "state.json").write_text(json.dumps({"app": records, "host_app_opened": True}))
+            with mock.patch.object(bql.os, "kill", lambda pid, signal: signals.append((pid, signal))):
+                return run_bql("cleanup", run=lambda args, **kwargs: commands.append(args),
+                               LIBPROC=FakeKernel(lambda: processes), WORK=work, STATE=work / "state.json",
+                               FIXTURES=work / "fixtures", EVIDENCE=work / "evidence")
+
+        mine, older = {"pid": 200, "start": 2, "file": "a.abr"}, {"pid": 202, "token": "bql-202", "file": "c.abr"}
+        code, result = cleanup([mine, {"pid": 201, "start": 6}, {"pid": 203, "start": 4}, older])
+        self.assertEqual((code, signals, commands, result.get("ended_app_instances"),
+                          result.get("unverified_app_records")), (0, [(200, 15)], [], [mine], [older]))
+        code, result = cleanup([{"pid": 204, "start": 5}])
+        self.assertEqual((code, result.get("error"), json.loads((work / "state.json").read_text())["app"]),
+                         (2, "proc_pidinfo 204 failed: Operation not permitted", [{"pid": 204, "start": 5}]))
 
 
 class HungOsascriptTest(unittest.TestCase):
@@ -574,6 +1031,74 @@ class FakeLibproc:
             return 0
         buffer.value = os.fsencode(path)
         return len(buffer.value)
+
+
+@dataclasses.dataclass
+class FakeProcess:
+    path: str
+    argv: List[str]
+    start: int = 1
+    env: List[str] = dataclasses.field(default_factory=lambda: ["HOME=/Users/me"])
+    error: int = 0
+
+
+class FakeKernel(FakeLibproc):
+    def __init__(self, processes):
+        super().__init__(lambda: {pid: process.path for pid, process in processes().items()})
+        self.processes = processes
+
+    def proc_pidinfo(self, pid, flavor, arg, buffer, size):
+        if (flavor, arg.value, size) != (bql.PROC_PIDTBSDINFO, 0, bql.PROC_BSDINFO_SIZE):
+            raise AssertionError(f"proc_pidinfo flavor {flavor}, arg {arg.value}, size {size}")
+        process = self.processes().get(pid)
+        if process is None or process.error:
+            ctypes.set_errno(process.error if process else errno.ESRCH)
+            return 0
+        struct.pack_into("=QQ", buffer, size - 16, *divmod(process.start, 1_000_000))
+        return size
+
+    def sysctl(self, mib, count, buffer, size, new, new_size):
+        if (mib[0], mib[1], count) != (bql.CTL_KERN, bql.KERN_PROCARGS2, 3):
+            raise AssertionError(f"sysctl {list(mib)[:count]}")
+        process = self.processes().get(mib[2])
+        if process is None:
+            ctypes.set_errno(errno.EINVAL)
+            return -1
+        data = b"".join([len(process.argv).to_bytes(4, sys.byteorder), os.fsencode(process.path), b"\0" * 4,
+                         *(os.fsencode(arg) + b"\0" for arg in [*process.argv, *process.env])])
+        ctypes.memmove(buffer, data, len(data))
+        size._obj.value = len(data)
+        return 0
+
+
+class FindInstanceTest(unittest.TestCase):
+    def test_only_the_installed_app_running_with_the_exact_token_argument_is_found_until_it_exits(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        app = tmp / "BrushesQuickLook.app"
+        (app / "Contents/MacOS").mkdir(parents=True)
+        (app / "Contents/MacOS/BrushesQuickLook").symlink_to("/bin/bash")
+        token, wait = f"bql-{uuid.uuid4()}", "read -t 30"
+        launches = [["/bin/bash", "-c", wait, "-BQLLaunch", f"{token}-suffix"],
+                    ["/bin/bash", "-c", wait, "-BQLLaunch", "bql-x", "--note", token],
+                    ["/bin/zsh", "-c", wait, "-BQLLaunch", token],
+                    [str(app / "Contents/MacOS/BrushesQuickLook"), "-c", wait, "-BQLLaunch", token]]
+        launched_at = time.time()
+        started = []
+        for argv in launches:
+            proc = subprocess.Popen(argv, stdin=subprocess.PIPE)
+            self.addCleanup(proc.stdin.close)
+            self.addCleanup(proc.wait)
+            self.addCleanup(proc.kill)
+            started.append(proc)
+        with mock.patch.object(bql, "APP", app):
+            found = bql.find_instance(token)
+            self.assertEqual((found.pid, abs(found.start / 1e6 - launched_at) < 5), (started[-1].pid, True))
+            self.assertEqual((bql.running(found), bql.running(dataclasses.replace(found, start=found.start + 1))),
+                             (True, False))
+            started[-1].kill()
+            started[-1].wait()
+            self.assertEqual((bql.running(found), bql.find_instance(token)), (False, None))
 
 
 class FakeMac:
@@ -779,7 +1304,8 @@ class FakeMac:
         return {"subprocess": SimpleNamespace(run=self.run, TimeoutExpired=subprocess.TimeoutExpired),
                 "LIBPROC": self.libproc, "alive": lambda pid: pid in self.processes, "check_build": check_build,
                 "REPO": self.repo, "BUILD": self.build, "APP": self.app, "WORK": self.root / "work",
-                "STATE": self.root / "work/state.json", "time": SimpleNamespace(time=lambda: self.now[0], sleep=sleep),
+                "STATE": self.root / "work/state.json",
+                "time": SimpleNamespace(time=lambda: self.now[0], monotonic=lambda: self.now[0], sleep=sleep),
                 "tempfile": SimpleNamespace(mkdtemp=lambda: tempfile.mkdtemp(dir=self.root)), **changes}
 
 
