@@ -1,9 +1,11 @@
+import ast
 import importlib.machinery
 import importlib.util
 import io
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -718,6 +720,38 @@ class CheckBuildTest(unittest.TestCase):
                     self.assertEqual((code, result["ok"], bool(result.get("fix"))), (2, False, True))
                     self.assertTrue(result["error"].startswith(f"{tool} "), result["error"])
                     self.assertIn(f" {target} exited 9: ", result["error"])
+
+
+POLLERS = {"bql": {"wait_for", "wait_for_new_crashes"}, "vm": {"cmd_up", "cmd_watch"}}
+
+
+def fixed_sleeps(name, source):
+    lines, problems = source.splitlines(), []
+
+    def visit(node, function):
+        if isinstance(node, ast.FunctionDef):
+            if node.name in POLLERS[name]:
+                return
+            function = node.name
+        if (isinstance(node, ast.Call) and ast.unparse(node.func) == "time.sleep"
+                and ast.unparse(node) != "time.sleep(settle)"
+                and not re.search(r"# sleep-ok: \S", lines[node.lineno - 1])):
+            problems.append(f"{name}:{node.lineno} {function} calls time.sleep. "
+                            "Poll with wait_for(probe, timeout) or wait_for_new_crashes(before, since).")
+        for child in ast.iter_child_nodes(node):
+            visit(child, function)
+
+    visit(ast.parse(source), "<module>")
+    return problems
+
+
+class SleepLintTest(unittest.TestCase):
+    def test_bql_and_vm_poll_for_evidence_instead_of_sleeping(self):
+        self.assertEqual(fixed_sleeps("bql", "import time\n\ndef capture():\n    time.sleep(1)\n"),
+                         ["bql:4 capture calls time.sleep. "
+                          "Poll with wait_for(probe, timeout) or wait_for_new_crashes(before, since)."])
+        self.assertEqual([problem for name in POLLERS
+                          for problem in fixed_sleeps(name, Path(__file__).with_name(name).read_text())], [])
 
 
 if __name__ == "__main__":
