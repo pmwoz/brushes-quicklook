@@ -162,6 +162,7 @@ targets:
     platform: macOS
     sources:
       - path: Tests
+      - path: App/FileMenu.swift
       - path: Preview
         excludes: ["*.plist", "*.entitlements"]
       - path: Thumbnail
