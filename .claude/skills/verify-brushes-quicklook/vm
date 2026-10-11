@@ -85,7 +85,7 @@ sqlite3 -cmd ".timeout 10000" "$HOME/Library/Application Support/com.apple.TCC/T
     ('kTCCServiceAppleEvents', '$agent', 1, 2, 0, 1, 0, 'com.apple.systemevents')"
 """
 
-HOST_BUILD = [["scripts/build.sh"], ["scripts/check-build.sh", str(BUILD)]]
+HOST_BUILD = [["scripts/build.sh"], [bql.__file__, "check-build", str(BUILD)]]
 
 
 def vm_name(image):

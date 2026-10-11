@@ -3,6 +3,9 @@ import importlib.util
 import io
 import json
 import os
+import plistlib
+import shutil
+import subprocess
 import tempfile
 import unittest
 from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
@@ -459,6 +462,262 @@ class HungOsascriptTest(unittest.TestCase):
     def test_a_hung_script_that_sends_no_apple_event_stays_an_unexpected_error(self):
         with mock.patch.object(bql, "run", self.hang), self.assertRaises(bql.subprocess.TimeoutExpired):
             bql.osascript(bql.WINDOWS_JS, language="JavaScript")
+
+
+TYPE, REASONS = "NSPrivacyAccessedAPIType", "NSPrivacyAccessedAPITypeReasons"
+FILE_TIMESTAMP = {TYPE: "NSPrivacyAccessedAPICategoryFileTimestamp", REASONS: ["C617.1"]}
+USER_DEFAULTS = {TYPE: "NSPrivacyAccessedAPICategoryUserDefaults", REASONS: ["CA92.1"]}
+BRUSH_TYPES = ["pl.esdesign.brushesquicklook.abr", "pl.esdesign.brushesquicklook.brush",
+               "pl.esdesign.brushesquicklook.brushset"]
+
+
+def manifest(*entries):
+    return plistlib.dumps({"NSPrivacyTracking": False, "NSPrivacyAccessedAPITypes": list(entries)})
+
+
+def user_defaults(changes):
+    return {key: value for key, value in {**USER_DEFAULTS, **changes}.items() if value is not None}
+
+
+class PrivacyManifestTest(unittest.TestCase):
+    def test_each_defect_is_reported_at_its_key_and_nowhere_else(self):
+        entries = "NSPrivacyAccessedAPITypes"
+        keyboards = {TYPE: "NSPrivacyAccessedAPICategoryActiveKeyboards", REASONS: ["3EC4.1"]}
+        rows = [
+            ("M0 the shipped manifest", manifest(FILE_TIMESTAMP, USER_DEFAULTS), []),
+            ("an ActiveKeyboards entry, which no symbol needs", manifest(FILE_TIMESTAMP, USER_DEFAULTS, keyboards), []),
+            ("not a property list", b"<plist><dict>", [""]),
+            ("no entries array", plistlib.dumps({"NSPrivacyTracking": False}), [entries]),
+            ("M1 an entry without a category", manifest(FILE_TIMESTAMP, user_defaults({TYPE: None})),
+             [f"{entries}[1].{TYPE}", entries]),
+            ("M1b the last entry without a category", manifest(FILE_TIMESTAMP, USER_DEFAULTS, {REASONS: ["85F4.1"]}),
+             [f"{entries}[2].{TYPE}"]),
+            ("M2 an entry that is not a dictionary",
+             manifest(FILE_TIMESTAMP, USER_DEFAULTS, "NSPrivacyAccessedAPICategoryDiskSpace"), [f"{entries}[2]"]),
+            ("M3 an unknown category",
+             manifest(FILE_TIMESTAMP, USER_DEFAULTS, user_defaults({TYPE: "NSPrivacyAccessedAPICategoryBogus"})),
+             [f"{entries}[2].{TYPE}"]),
+            ("M4 a category with a trailing newline",
+             manifest(FILE_TIMESTAMP, user_defaults({TYPE: "NSPrivacyAccessedAPICategoryUserDefaults\n"})),
+             [f"{entries}[1].{TYPE}", entries]),
+            ("M5 no entry for a category the binary uses", manifest(FILE_TIMESTAMP), [entries]),
+            ("M6 an entry without reasons", manifest(FILE_TIMESTAMP, user_defaults({REASONS: None})),
+             [f"{entries}[1].{REASONS}"]),
+            ("V1 an empty reason array", manifest(FILE_TIMESTAMP, user_defaults({REASONS: []})),
+             [f"{entries}[1].{REASONS}"]),
+            ("V2 an empty reason", manifest(FILE_TIMESTAMP, user_defaults({REASONS: [""]})),
+             [f"{entries}[1].{REASONS}[0]"]),
+            ("V3 a reason that is not a code", manifest(FILE_TIMESTAMP, user_defaults({REASONS: ["because"]})),
+             [f"{entries}[1].{REASONS}[0]"]),
+            ("V4 a reason code with a trailing newline",
+             manifest(FILE_TIMESTAMP, user_defaults({REASONS: ["CA92.1\n"]})), [f"{entries}[1].{REASONS}[0]"]),
+        ]
+        for name, data, keys in rows:
+            with self.subTest(name):
+                problems = bql.privacy_problems(data, {"_fstat", "_OBJC_CLASS_$_NSUserDefaults", "dealloc"})
+                self.assertEqual([key for key, _ in problems], keys)
+
+    def test_a_required_reason_api_needs_any_one_of_its_categories(self):
+        disk_space = {TYPE: "NSPrivacyAccessedAPICategoryDiskSpace", REASONS: ["85F4.1"]}
+        self.assertEqual(bql.privacy_problems(manifest(disk_space), {"_getattrlist"}), [])
+        self.assertEqual(bql.privacy_problems(manifest(), {"_getattrlist"}), [(
+            "NSPrivacyAccessedAPITypes", "the binary uses _getattrlist, which needs "
+            "NSPrivacyAccessedAPICategoryFileTimestamp or NSPrivacyAccessedAPICategoryDiskSpace")])
+
+
+def write_manifests(app, data):
+    for bundle in bql.bundles(app).values():
+        (bundle / "Contents/Resources/PrivacyInfo.xcprivacy").write_bytes(data)
+
+
+def set_info(bundle, **changes):
+    info = bundle / "Contents/Info.plist"
+    info.write_bytes(plistlib.dumps({**plistlib.loads(info.read_bytes()), **changes}))
+
+
+def set_brush_types(app, app_types, extension_types):
+    set_info(app, UTImportedTypeDeclarations=app_types)
+    for kind in bql.PLUGINS:
+        set_info(bql.bundles(app)[kind],
+                 NSExtension={"NSExtensionAttributes": {"QLSupportedContentTypes": extension_types}})
+
+
+def add_unknown_tag(app, path):
+    for bundle in bql.bundles(app).values():
+        plist = bundle / path
+        plist.write_bytes(plist.read_bytes().replace(b"</dict>\n</plist>", b"<bogus/>\n</dict>\n</plist>"))
+
+
+def entitlements(sandbox, tag=""):
+    return plistlib.dumps({"com.apple.security.app-sandbox": sandbox}).decode().replace("</dict>", f"{tag}</dict>")
+
+
+class CheckBuildTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def shippable_build(self):
+        app = Path(tempfile.mkdtemp(dir=self.dir)) / "BrushesQuickLook.app"
+        extension = {"NSExtension": {"NSExtensionAttributes": {"QLSupportedContentTypes": BRUSH_TYPES}}}
+        infos = {"app": {"CFBundleIconName": "AppIcon", "ITSAppUsesNonExemptEncryption": False,
+                         "LSApplicationCategoryType": "public.app-category.graphics-design",
+                         "UTImportedTypeDeclarations": [{"UTTypeIdentifier": t} for t in BRUSH_TYPES]},
+                 "preview": extension, "thumbnail": extension}
+        for kind, bundle in bql.bundles(app).items():
+            (bundle / "Contents/MacOS").mkdir(parents=True)
+            (bundle / "Contents/Resources").mkdir()
+            (bundle / "Contents/MacOS" / bundle.stem).write_bytes(b"")
+            (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps(infos[kind]))
+        (app / "Contents/Resources/AppIcon.icns").write_bytes(b"")
+        write_manifests(app, manifest(FILE_TIMESTAMP, USER_DEFAULTS))
+        tool_output = {kind: {"archs": "x86_64 arm64", "flags": "0x10002(adhoc,runtime)",
+                              "entitlements": entitlements(True), "symbols": ["_fstat"], "selectors": ["dealloc"],
+                              "exit": {}} for kind in infos}
+        tool_output["app"]["symbols"].append("_OBJC_CLASS_$_NSUserDefaults")
+        return app, tool_output
+
+    @staticmethod
+    def tools(app, tool_output):
+        plutil = subprocess.run
+
+        def run(args, **kwargs):
+            if args[0] == "plutil":
+                return plutil(args, **kwargs)
+            path = Path(args[-1])
+            kind = next(kind for kind, bundle in bql.bundles(app).items()
+                        if path in (bundle, bundle / "Contents/MacOS" / bundle.stem))
+            reported = tool_output[kind]
+            tool = " ".join(args[:2]) if args[0] == "codesign" else args[0]
+            stdout = stderr = ""
+            if tool == "lipo":
+                stdout = reported["archs"] + "\n"
+            elif tool == "codesign -dv":
+                stderr = (f"Executable={path}\nCodeDirectory v=20500 size=3709 flags={reported['flags']} "
+                          "hashes=105+7 location=embedded\n")
+            elif tool == "codesign -d":
+                stdout = reported["entitlements"]
+            elif tool == "nm":
+                stdout = "".join(f"{path} (for architecture {arch}):\n"
+                                 + "".join(f"{symbol}\n" for symbol in reported["symbols"])
+                                 for arch in ("x86_64", "arm64"))
+            else:
+                stdout = (f"{path} (architecture arm64):\nContents of (__TEXT,__objc_methname) section\n"
+                          + "".join(f"00000001000ed0a2  {selector}\n" for selector in reported["selectors"]))
+            return subprocess.CompletedProcess(args, reported["exit"].get(tool, 0), stdout, stderr)
+        return run
+
+    def test_each_defect_is_reported_at_its_bundle_and_key_with_the_file_to_fix(self):
+        reasons = "PrivacyInfo.xcprivacy NSPrivacyAccessedAPITypes[1].NSPrivacyAccessedAPITypeReasons[0]"
+        names = ("BrushesQuickLook.app", "BrushesPreview.appex", "BrushesThumbnail.appex")
+        brush_types = ["BrushesQuickLook.app Info.plist UTImportedTypeDeclarations",
+                       "BrushesPreview.appex Info.plist NSExtension.NSExtensionAttributes.QLSupportedContentTypes",
+                       "BrushesThumbnail.appex Info.plist NSExtension.NSExtensionAttributes.QLSupportedContentTypes"]
+        joined, keyed = " ".join(BRUSH_TYPES), dict.fromkeys(BRUSH_TYPES, True)
+        rows = [
+            ("a shippable build", lambda app, tool_output: None, [], ""),
+            ("a single architecture", lambda app, tool_output: tool_output["preview"].update(archs="arm64"),
+             ["BrushesPreview.appex Contents/MacOS/BrushesPreview"], "scripts/build.sh"),
+            ("no hardened runtime", lambda app, tool_output: tool_output["thumbnail"].update(flags="0x2(adhoc)"),
+             ["BrushesThumbnail.appex code signature"], "project.yml"),
+            ("no sandbox", lambda app, tool_output: tool_output["app"].update(entitlements=entitlements(False)),
+             ["BrushesQuickLook.app entitlements com.apple.security.app-sandbox"], "project.yml"),
+            ("an entitlement tag that plutil rejects", lambda app, tool_output: [
+                output.update(entitlements=entitlements(True, "<bogus/>")) for output in tool_output.values()],
+             [f"{name} entitlements" for name in names], "project.yml"),
+            ("an app without a brush type", lambda app, tool_output: set_info(
+                app, UTImportedTypeDeclarations=[{"UTTypeIdentifier": t} for t in BRUSH_TYPES[1:]]),
+             ["BrushesQuickLook.app Info.plist UTImportedTypeDeclarations"], "project.yml"),
+            ("an extension without a brush type", lambda app, tool_output: set_info(
+                bql.bundles(app)["thumbnail"],
+                NSExtension={"NSExtensionAttributes": {"QLSupportedContentTypes": BRUSH_TYPES[:2]}}),
+             ["BrushesThumbnail.appex Info.plist NSExtension.NSExtensionAttributes.QLSupportedContentTypes"],
+             "project.yml"),
+            ("brush types in one string", lambda app, tool_output: set_brush_types(app, joined, joined),
+             brush_types, "project.yml"),
+            ("brush types as dictionary keys", lambda app, tool_output: set_brush_types(app, keyed, keyed),
+             brush_types, "project.yml"),
+            ("brush type arrays with items of the wrong type",
+             lambda app, tool_output: set_brush_types(app, BRUSH_TYPES, [*BRUSH_TYPES, 1]), brush_types, "project.yml"),
+            ("an Info.plist tag that plutil rejects",
+             lambda app, tool_output: add_unknown_tag(app, "Contents/Info.plist"),
+             [f"{name} Info.plist" for name in names], "project.yml"),
+            ("another icon name", lambda app, tool_output: set_info(app, CFBundleIconName="Icon"),
+             ["BrushesQuickLook.app Info.plist CFBundleIconName"], "App/Assets.xcassets"),
+            ("no icon file", lambda app, tool_output: (app / "Contents/Resources/AppIcon.icns").unlink(),
+             ["BrushesQuickLook.app Contents/Resources/AppIcon.icns"], "App/Assets.xcassets"),
+            ("another category",
+             lambda app, tool_output: set_info(app, LSApplicationCategoryType="public.app-category.games"),
+             ["BrushesQuickLook.app Info.plist LSApplicationCategoryType"], "project.yml"),
+            ("an encryption flag of integer 0", lambda app, tool_output: set_info(app, ITSAppUsesNonExemptEncryption=0),
+             ["BrushesQuickLook.app Info.plist ITSAppUsesNonExemptEncryption"], "project.yml"),
+            ("an extension not embedded", lambda app, tool_output: shutil.rmtree(bql.bundles(app)["preview"]),
+             ["BrushesPreview.appex Contents/MacOS/BrushesPreview"], "project.yml"),
+            ("V5 no privacy manifest",
+             lambda app, tool_output: [(bundle / "Contents/Resources/PrivacyInfo.xcprivacy").unlink()
+                                 for bundle in bql.bundles(app).values()],
+             [f"{name} PrivacyInfo.xcprivacy" for name in names], "buildPhase: resources"),
+            ("a manifest tag that plutil rejects",
+             lambda app, tool_output: add_unknown_tag(app, "Contents/Resources/PrivacyInfo.xcprivacy"),
+             [f"{name} PrivacyInfo.xcprivacy" for name in names], "PrivacyInfo.xcprivacy"),
+            ("V2 an empty reason",
+             lambda app, tool_output: write_manifests(app, manifest(FILE_TIMESTAMP, user_defaults({REASONS: [""]}))),
+             [f"{name} {reasons}" for name in names], "PrivacyInfo.xcprivacy"),
+            ("M5 no UserDefaults entry, which only the app needs",
+             lambda app, tool_output: write_manifests(app, manifest(FILE_TIMESTAMP)),
+             ["BrushesQuickLook.app PrivacyInfo.xcprivacy NSPrivacyAccessedAPITypes"], "PrivacyInfo.xcprivacy"),
+            ("an extension selector that needs SystemBootTime",
+             lambda app, tool_output: tool_output["preview"]["selectors"].append("systemUptime"),
+             ["BrushesPreview.appex PrivacyInfo.xcprivacy NSPrivacyAccessedAPITypes"], "PrivacyInfo.xcprivacy"),
+        ]
+        for name, mutate, wheres, fix_file in rows:
+            with self.subTest(name):
+                app, tool_output = self.shippable_build()
+                mutate(app, tool_output)
+                with mock.patch.object(subprocess, "run", self.tools(app, tool_output)):
+                    problems = bql.check_build(app)
+                self.assertEqual([where for where, _, _ in problems], wheres)
+                self.assertEqual([fix_file in fix for _, _, fix in problems], [True] * len(wheres))
+
+    def test_the_cli_exits_0_on_a_shippable_build_1_naming_each_defect_and_2_without_an_app(self):
+        app, tool_output = self.shippable_build()
+        with mock.patch.object(subprocess, "run", self.tools(app, tool_output)):
+            code, result = run_bql("check-build", app)
+            self.assertEqual((code, result["ok"], "error" in result, "fix" in result), (0, True, False, False))
+            write_manifests(app, manifest(FILE_TIMESTAMP, user_defaults({REASONS: ["CA92.1\n"]})))
+            code, result = run_bql("check-build", app)
+            self.assertEqual((code, result["ok"]), (1, False))
+            self.assertIn("BrushesThumbnail.appex PrivacyInfo.xcprivacy NSPrivacyAccessedAPITypes[1]."
+                          "NSPrivacyAccessedAPITypeReasons[0]: 'CA92.1\\n' is not a reason code", result["error"])
+            self.assertIn("Edit PrivacyInfo.xcprivacy at the repository root.", result["fix"])
+            tool_output["thumbnail"].update(entitlements=entitlements(True, "<bogus/>"))
+            code, result = run_bql("check-build", app)
+            self.assertEqual((code, result["ok"]), (1, False))
+            self.assertIn("BrushesThumbnail.appex entitlements: is not a valid property list "
+                          "(Encountered unknown tag bogus on line ", result["error"])
+            add_unknown_tag(app, "Contents/Resources/PrivacyInfo.xcprivacy")
+            code, result = run_bql("check-build", app)
+        self.assertEqual((code, result["ok"]), (1, False))
+        self.assertIn("BrushesPreview.appex PrivacyInfo.xcprivacy: is not a valid property list "
+                      "(Encountered unknown tag bogus on line ", result["error"])
+        code, result = run_bql("check-build", self.dir / "BrushesQuickLook.app")
+        self.assertEqual((code, result["ok"], result["error"]),
+                         (2, False, f"{self.dir}/BrushesQuickLook.app is not an app bundle"))
+
+    def test_a_tool_that_prints_valid_output_and_exits_nonzero_fails_the_cli_in_every_bundle(self):
+        for kind in ("app", *bql.PLUGINS):
+            for tool in ("lipo", "codesign -dv", "codesign -d", "nm", "otool"):
+                with self.subTest(f"{tool} on the {kind}"):
+                    app, tool_output = self.shippable_build()
+                    tool_output[kind]["exit"][tool] = 9
+                    bundle = bql.bundles(app)[kind]
+                    target = bundle if tool.startswith("codesign") else bundle / "Contents/MacOS" / bundle.stem
+                    with mock.patch.object(subprocess, "run", self.tools(app, tool_output)):
+                        code, result = run_bql("check-build", app)
+                    self.assertEqual((code, result["ok"], bool(result.get("fix"))), (2, False, True))
+                    self.assertTrue(result["error"].startswith(f"{tool} "), result["error"])
+                    self.assertIn(f" {target} exited 9: ", result["error"])
 
 
 if __name__ == "__main__":

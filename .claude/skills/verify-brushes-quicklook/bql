@@ -8,6 +8,7 @@ check ran and failed, 2 means it could not run (the JSON says what to do).
 import argparse
 import json
 import os
+import plistlib
 import re
 import shutil
 import subprocess
@@ -19,6 +20,7 @@ from bisect import bisect_right
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 REPO = Path(__file__).resolve().parents[3]
 APP = Path("/Applications/BrushesQuickLook.app")
@@ -93,8 +95,8 @@ def note(message):
     print(message, file=sys.stderr, flush=True)
 
 
-def run(args, timeout=120, check=False):
-    proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+def run(args, timeout=120, check=False, input=None):
+    proc = subprocess.run(args, input=input, capture_output=True, text=True, timeout=timeout)
     if check and proc.returncode != 0:
         raise Fail(f"{' '.join(map(str, args))} exited {proc.returncode}: {proc.stderr.strip() or proc.stdout.strip()}",
                    "Run the command by hand to see the full error.")
@@ -539,6 +541,148 @@ def bundles(app):
     return {"app": app, **{kind: app / f"Contents/PlugIns/{name}.appex" for kind, name in PLUGINS.items()}}
 
 
+# https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api
+CATEGORIES = {
+    "NSPrivacyAccessedAPICategoryFileTimestamp": frozenset({
+        "_NSFileCreationDate", "_NSFileModificationDate", "fileModificationDate", "_NSURLContentModificationDateKey",
+        "_NSURLCreationDateKey", "_stat", "_fstat", "_fstatat", "_lstat", "_stat64", "_fstat64", "_lstat64",
+        "_getattrlistbulk", "_getattrlist", "_fgetattrlist", "_getattrlistat"}),
+    "NSPrivacyAccessedAPICategorySystemBootTime": frozenset({"_mach_absolute_time", "systemUptime"}),
+    "NSPrivacyAccessedAPICategoryDiskSpace": frozenset({
+        "_getattrlist", "_fgetattrlist", "_getattrlistat", "_NSURLVolumeAvailableCapacityKey",
+        "_NSURLVolumeAvailableCapacityForImportantUsageKey", "_NSURLVolumeAvailableCapacityForOpportunisticUsageKey",
+        "_NSURLVolumeTotalCapacityKey", "_NSFileSystemFreeSize", "_NSFileSystemSize", "_statfs", "_statvfs",
+        "_fstatfs", "_fstatvfs", "_statfs64", "_fstatfs64"}),
+    "NSPrivacyAccessedAPICategoryActiveKeyboards": frozenset(),
+    "NSPrivacyAccessedAPICategoryUserDefaults": frozenset({"_OBJC_CLASS_$_NSUserDefaults"}),
+}
+REASON_CODE = re.compile(r"[0-9A-F]{4}\.[0-9]")
+UTTYPES = sorted(f"{BUNDLE_ID}.{extension}" for extension in BRUSH_EXTENSIONS)
+MANIFEST = "PrivacyInfo.xcprivacy"
+MANIFEST_FIX = f"Edit {MANIFEST} at the repository root. project.yml copies it into the app and both extensions."
+INFO_FIX = "Set it in the BrushesQuickLook target's info properties in project.yml."
+TYPES_FIX = "List all three brush types in the target's info properties in project.yml."
+ICON_FIX = "Keep the AppIcon set in App/Assets.xcassets. Xcode compiles it into AppIcon.icns and CFBundleIconName."
+APP_INFO = {
+    "CFBundleIconName": ("AppIcon", ICON_FIX),
+    "LSApplicationCategoryType": ("public.app-category.graphics-design", INFO_FIX),
+    "ITSAppUsesNonExemptEncryption": (False, INFO_FIX),
+}
+
+
+def privacy_problems(manifest, apis):
+    try:
+        root = plistlib.loads(manifest)
+    except (ValueError, ExpatError) as error:
+        return [("", f"is not a property list: {error}")]
+    entries = root.get("NSPrivacyAccessedAPITypes") if isinstance(root, dict) else None
+    if not isinstance(entries, list):
+        return [("NSPrivacyAccessedAPITypes", f"is {entries!r}, expected an array")]
+    problems, declared = [], set()
+    for i, entry in enumerate(entries):
+        key = f"NSPrivacyAccessedAPITypes[{i}]"
+        if not isinstance(entry, dict):
+            problems.append((key, f"is {entry!r}, expected a dictionary"))
+            continue
+        category = entry.get("NSPrivacyAccessedAPIType")
+        if isinstance(category, str) and category in CATEGORIES:
+            declared.add(category)
+        else:
+            problems.append((f"{key}.NSPrivacyAccessedAPIType", f"{category!r} is not a known category"))
+        reasons = entry.get("NSPrivacyAccessedAPITypeReasons")
+        if not isinstance(reasons, list) or not reasons:
+            problems.append((f"{key}.NSPrivacyAccessedAPITypeReasons", f"is {reasons!r}, expected a non-empty array"))
+            continue
+        problems += [(f"{key}.NSPrivacyAccessedAPITypeReasons[{j}]", f"{reason!r} is not a reason code such as CA92.1")
+                     for j, reason in enumerate(reasons)
+                     if not isinstance(reason, str) or not REASON_CODE.fullmatch(reason)]
+    for api in sorted(apis):
+        needed = [category for category, members in CATEGORIES.items() if api in members]
+        if needed and not declared.intersection(needed):
+            problems.append(("NSPrivacyAccessedAPITypes", f"the binary uses {api}, which needs {' or '.join(needed)}"))
+    return problems
+
+
+def lint_error(path, text=None):
+    # plistlib accepts an unknown XML tag that plutil rejects.
+    proc = run(["plutil", "-lint", str(path)], input=text)
+    if proc.returncode == 0:
+        return None
+    shown = "<stdin>" if path == "-" else path
+    return f"is not a valid property list {(proc.stderr.strip() or proc.stdout.strip()).removeprefix(f'{shown}: ')}"
+
+
+def imported_apis(binary):
+    symbols = run(["nm", "-u", "-j", "-arch", "all", str(binary)], check=True).stdout.splitlines()
+    methnames = run(["otool", "-arch", "all", "-v", "-s", "__TEXT", "__objc_methname", str(binary)], check=True).stdout
+    selectors = re.findall(r"^[0-9a-f]+\s+(\S+)", methnames, re.M)
+    return {name.removesuffix("$INODE64") for name in symbols + selectors}
+
+
+def bundle_problems(kind, bundle):
+    binary = bundle / "Contents/MacOS" / bundle.stem
+    if not binary.is_file():
+        return [(f"Contents/MacOS/{bundle.stem}", "is missing",
+                 "Build Release with scripts/build.sh. project.yml embeds both extensions in the app.")]
+    problems = []
+    archs = run(["lipo", "-archs", str(binary)], check=True).stdout.split()
+    if not {"arm64", "x86_64"} <= set(archs):
+        problems.append((f"Contents/MacOS/{bundle.stem}", f"has architectures {archs}, expected arm64 and x86_64",
+                         "Build Release with ONLY_ACTIVE_ARCH=NO, as scripts/build.sh does."))
+    signature = run(["codesign", "-dv", str(bundle)], check=True).stderr
+    flags = re.findall(r"\bflags=0x[0-9a-f]+\(([^)]*)\)", signature)
+    if not flags or not all("runtime" in f.split(",") for f in flags):
+        problems.append(("code signature", f"has no hardened runtime flag: {signature.strip()}",
+                         "Keep ENABLE_HARDENED_RUNTIME: YES and OTHER_CODE_SIGN_FLAGS: --options runtime "
+                         "in project.yml."))
+    entitlements = run(["codesign", "-d", "--entitlements", "-", "--xml", str(bundle)], check=True).stdout
+    if error := entitlements and lint_error("-", entitlements):
+        problems.append(("entitlements", error, "Fix the target's entitlements in project.yml."))
+    else:
+        sandbox = plistlib.loads(entitlements.encode()).get("com.apple.security.app-sandbox") if entitlements else None
+        if sandbox is not True:
+            problems.append(("entitlements com.apple.security.app-sandbox", f"is {sandbox!r}, expected True",
+                             "Set com.apple.security.app-sandbox: true in the target's entitlements in project.yml."))
+    info_plist = bundle / "Contents/Info.plist"
+    if error := lint_error(info_plist):
+        return problems + [("Info.plist", error, "Fix the target's info properties in project.yml.")]
+    info = plistlib.loads(info_plist.read_bytes())
+    if kind == "app":
+        types_key, expected_types = "UTImportedTypeDeclarations", "an array of type declarations"
+        listed = info.get(types_key)
+        types = ([declaration.get("UTTypeIdentifier") for declaration in listed]
+                 if isinstance(listed, list) and all(isinstance(d, dict) for d in listed) else None)
+        for key, (expected, fix) in APP_INFO.items():
+            # A plist integer 0 equals False in Python. Apple types ITSAppUsesNonExemptEncryption as a Boolean.
+            if type(info.get(key)) is not type(expected) or info.get(key) != expected:
+                problems.append((f"Info.plist {key}", f"is {info.get(key)!r}, expected {expected!r}", fix))
+        if not (bundle / "Contents/Resources/AppIcon.icns").is_file():
+            problems.append(("Contents/Resources/AppIcon.icns", "is missing", ICON_FIX))
+    else:
+        types_key, expected_types = "NSExtension.NSExtensionAttributes.QLSupportedContentTypes", "an array of strings"
+        listed = info.get("NSExtension", {}).get("NSExtensionAttributes", {}).get("QLSupportedContentTypes")
+        types = listed if isinstance(listed, list) and all(isinstance(t, str) for t in listed) else None
+    if types is None:
+        problems.append((f"Info.plist {types_key}", f"is {listed!r}, expected {expected_types}", TYPES_FIX))
+    elif missing := [t for t in UTTYPES if t not in types]:
+        problems.append((f"Info.plist {types_key}", f"lacks {', '.join(missing)}", TYPES_FIX))
+    manifest = bundle / "Contents/Resources" / MANIFEST
+    if not manifest.is_file():
+        return problems + [(MANIFEST, "is missing from Contents/Resources",
+                            f"Add {MANIFEST} to the target's sources in project.yml with buildPhase: resources.")]
+    if error := lint_error(manifest):
+        return problems + [(MANIFEST, error, MANIFEST_FIX)]
+    return problems + [(f"{MANIFEST} {key}".rstrip(), error, MANIFEST_FIX)
+                       for key, error in privacy_problems(manifest.read_bytes(), imported_apis(binary))]
+
+
+def check_build(app):
+    if not (app / "Contents/Info.plist").is_file():
+        raise Fail(f"{app} is not an app bundle", f"Pass a built BrushesQuickLook.app, such as {BUILD}.")
+    return [(f"{bundle.name} {where}", error, fix)
+            for kind, bundle in bundles(app).items() for where, error, fix in bundle_problems(kind, bundle)]
+
+
 def cmd_doctor(args):
     checks = []
 
@@ -609,6 +753,13 @@ def cmd_doctor(args):
                  failures), 1 if failures else 0)
 
 
+def cmd_check_build(args):
+    app = Path(args.app).absolute()
+    problems = check_build(app)
+    emit(verdict({"app": str(app)}, [(f"{where}: {error}", fix) for where, error, fix in problems]),
+         1 if problems else 0)
+
+
 def cmd_install(args):
     script = REPO / "scripts/install.sh"
     if args.dry_run:
@@ -617,7 +768,7 @@ def cmd_install(args):
         build = [] if args.no_build else ["xcodegen generate", f"xcodebuild Release into {BUILD}"]
         emit({"ok": True, "dry_run": True, "script": str(script), "would": [
             *build,
-            f"scripts/check-build.sh {BUILD}",
+            f"bql check-build {BUILD}",
             {"unregister_from_launchservices": [p for p in paths if p != str(APP)]},
             f"quit the running app and wait up to 10 s for it to exit, delete {APP} and copy the Release build there",
             f"register {APP} and both extensions with lsregister and pluginkit",
@@ -631,8 +782,8 @@ def cmd_install(args):
     if proc.returncode != 0:
         fixes = {
             "build": "Run the xcodebuild command from README.md to see the full compiler output.",
-            "check-build": "The Release product failed a check in scripts/check-build.sh. The FAIL entry at the end "
-                           f"of `error` names it. Run `scripts/check-build.sh {BUILD}` for one result per line.",
+            "check-build": "The Release build failed `bql check-build`. Its JSON at the end of `error` names each "
+                           f"bundle, key and file to fix. Run `bql check-build {BUILD}` to read it on its own.",
             "quit": "BrushesQuickLook did not quit, because a sheet or panel is open or another instance runs. Close "
                     "the sheet or `kill` the pids in the error, then rerun `bql install`.",
             "replace": "Check that /Applications is writable and the app is not open from a mounted image.",
@@ -830,6 +981,9 @@ def main():
         epilog="Typical run: bql doctor; bql fixtures; bql thumb <file>; bql preview <file>; bql cleanup")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="read-only: is the installed app this checkout's Release build, registered and live")
+    check = sub.add_parser("check-build", help="check a Release build for universal binaries, hardened runtime, "
+                           "sandbox, brush types, privacy manifests, icon, category and encryption flag")
+    check.add_argument("app", help=f"the BrushesQuickLook.app to check, such as {BUILD.relative_to(REPO)}")
     install = sub.add_parser("install", help="build Release and install it to /Applications via scripts/install.sh")
     install.add_argument("--dry-run", action="store_true", help="list what install would change, change nothing")
     install.add_argument("--no-build", action="store_true",
@@ -859,7 +1013,7 @@ def main():
     if args.command == "thumb" and not args.size:
         args.size = [256, 48]
     try:
-        globals()[f"cmd_{args.command}"](args)
+        globals()[f"cmd_{args.command.replace('-', '_')}"](args)
     except Fail as failure:
         emit({"ok": False, "error": failure.error, "fix": failure.fix}, 2)
     except Exception as error:

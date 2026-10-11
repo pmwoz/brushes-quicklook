@@ -87,8 +87,9 @@ The app icon source is the 1024 px `icon_512x512@2x.png` in
 `App/Assets.xcassets/AppIcon.appiconset`. The smaller sizes are `sips -z`
 downscales of it.
 
-The checks CI runs after a Release build live in `scripts/check-build.sh` and
-take the built app path. CI runs the same steps on GitHub's `macos-26` image.
+After the Release build, CI checks the app with
+`.claude/skills/verify-brushes-quicklook/bql check-build <app>`. CI runs the
+same steps on GitHub's `macos-26` image.
 
 Run `scripts/install.sh` to build and check Release, replace
 `/Applications/BrushesQuickLook.app`, and register the app and both extensions.
