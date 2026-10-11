@@ -6,6 +6,7 @@ import io
 import json
 import os
 import plistlib
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -26,12 +27,38 @@ loader.exec_module(vm)
 LIMIT = "The number of VMs exceeds the system limit (other running VMs: abr-verify, bql-exp)"
 
 
-class FakeTartTest(unittest.TestCase):
-    """Puts a `tart` on PATH that lists this checkout's Tahoe VM in `state` beside two running VMs of other sessions."""
+def vm_in_checkout(root):
+    skill = root / ".claude/skills/verify-brushes-quicklook"
+    skill.mkdir(parents=True)
+    for script in (VM, VM.with_name("bql")):
+        shutil.copy2(script, skill)
+    return skill / "vm"
 
+
+def work_files():
+    return {str(path.relative_to(vm.WORK)): path.lstat().st_mtime_ns for path in vm.WORK.rglob("*")}
+
+
+# Discovery imports every test module before the first test runs and runs this module last, so the snapshot and
+# tearDownModule bracket test_bql too.
+WORK_BEFORE = work_files()
+
+
+def tearDownModule():
+    changed = sorted({path for path, _ in WORK_BEFORE.items() ^ work_files().items()})
+    if changed:
+        raise AssertionError(f"The tests changed {vm.WORK}: {', '.join(changed)}. Patch WORK for in-process calls, "
+                             "and start vm as a child process from vm_in_checkout().")
+
+
+class FakeTartTest(unittest.TestCase):
     def fake_tart(self, state):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.vm_copy = vm_in_checkout(Path(tmp.name))
+        repo = mock.patch.object(vm, "REPO", self.vm_copy.resolve().parents[3])
+        repo.start()
+        self.addCleanup(repo.stop)
         listed = [{"Name": vm.vm_name("tahoe"), "State": state, "Source": "local"},
                   {"Name": "abr-verify", "State": "running", "Source": "local"},
                   {"Name": "bql-exp", "State": "running", "Source": "local"}]
@@ -70,7 +97,7 @@ esac
 
     def run_vm(self, stdout):
         env = {**self.fake_tart("running"), "FAKE_ARGV": str(self.work.parent / "argv"), "FAKE_STDOUT": stdout}
-        proc = subprocess.run([sys.executable, str(VM), "run", "thumb", "x.abr", "--size", "256"],
+        proc = subprocess.run([sys.executable, str(self.vm_copy), "run", "thumb", "x.abr", "--size", "256"],
                               env=env, capture_output=True, text=True, timeout=30)
         return proc, (self.work.parent / "argv").read_text().splitlines()
 
