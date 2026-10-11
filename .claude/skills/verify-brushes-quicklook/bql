@@ -386,7 +386,7 @@ def preview_with_finder(file, png, settle):
     window_id = int(opened.stdout.strip())
     track("finder_windows", window_id)
     try:
-        time.sleep(1)
+        time.sleep(1)  # sleep-ok: gives Finder time to come to the front before System Events presses space
         press(49)  # space
         panel = wait_for(finder_panel, timeout=10)
         if panel:
