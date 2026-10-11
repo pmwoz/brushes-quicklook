@@ -6,37 +6,25 @@ struct BrushesQuickLookApp: App {
 
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
-    // CommandGroup(replacing: .newItem) also removes Open and Open Recent on macOS 14.
-    private static let unsupportedActions: Set<Selector> = [
-        #selector(NSDocumentController.newDocument(_:)),
-        #selector(NSDocument.save(_:)),
-        #selector(NSDocument.saveAs(_:)),
-        #selector(NSDocument.duplicate(_:)),
-        #selector(NSDocument.rename(_:)),
-        #selector(NSDocument.move(_:)),
-        #selector(NSDocument.revertToSaved(_:)),
-    ]
-
     init() {
         // macOS 14 shows an Open panel at launch next to the setup window when this key is unset.
         UserDefaults.standard.register(defaults: ["NSShowAppCentricOpenPanelInsteadOfUntitledFile": false])
         Task {
             let additions = NotificationCenter.default.notifications(named: NSMenu.didAddItemNotification)
-            Self.removeUnsupportedItems()
+            Self.pruneFileMenu()
             // SwiftUI re-adds DocumentGroup's document items to the File menu when a document window closes.
             for await _ in additions {
-                Self.removeUnsupportedItems()
+                Self.pruneFileMenu()
             }
         }
     }
 
-    private static func removeUnsupportedItems() {
-        for menu in NSApp.mainMenu?.items.compactMap(\.submenu) ?? [] {
-            for item in menu.items {
-                guard let action = item.action, unsupportedActions.contains(action) else { continue }
-                menu.removeItem(item)
-            }
-        }
+    // CommandGroup(replacing: .newItem) also removes Open and Open Recent on macOS 14.
+    private static func pruneFileMenu() {
+        let openDocument = #selector(NSDocumentController.openDocument(_:))
+        guard let menu = NSApp.mainMenu?.items.compactMap(\.submenu).first(where: { $0.items.contains { $0.action == openDocument } })
+        else { return }
+        FileMenu.prune(menu)
     }
 
     var body: some Scene {
