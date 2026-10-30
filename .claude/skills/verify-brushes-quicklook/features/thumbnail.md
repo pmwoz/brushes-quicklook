@@ -27,20 +27,22 @@ Preconditions:
 - Baseline preconditions from the index.
 
 - **Single tip, badge.** Run `bql thumb $F/root_brush.brush $F/ordered_set.brushset $F/sampled_tip.abr --size 256`.
-  Each PNG shows one grey tip and the matching badge. `ordered_set` has two
+  Each PNG shows one dark grey tip and the matching badge. `ordered_set` has two
   tips, so it still shows one.
 - **Strip.** Run `bql thumb $F/ordered_set.brushset --size 48`. The 48×48 PNG shows
   the tip with an orange strip along the bottom and no text.
 - **No tips.** Run `bql thumb $F/missing_shape.brush $F/wellformed_v6_min.abr $F/bad_shapes.brushset --size 256`.
-  Each PNG shows a grey brush glyph over the badge. The 600 MB file from the
+  Each PNG shows a grey brush glyph above the badge. The 600 MB file from the
   Too large recipe in [error-states.md](./error-states.md) shows the same glyph.
 - **Unreadable.** Run `bql thumb $F/v2_rle_overflow.abr $F/deep_metadata.brushset --size 256`.
-  Each PNG shows a grey warning triangle over the badge.
-- **Zero-area tip skipped.** Run `bql thumb $F/zero_area_tip.abr --size 256`. The PNG
-  shows the drawable tip, not an empty card.
+  Each PNG shows a grey warning triangle above the badge.
+- **Zero-area tip skipped.** Run `bql thumb $F/zero_area_tip.abr`, which renders
+  256 and 48 pt. Both PNGs show the drawable tip, not a glyph. The 48 pt one is
+  the check. Below 64 pt the extension asks brushkit for one tip, so a zero-area
+  tip in that slot would leave the glyph.
 - **Grid.** No corpus file has four drawable tips. Run
   `bql thumb "$BQL_REAL_FILES" --size 256` and pick a file with four or more
-  brushes. The PNG shows a 2×2 grid in file order.
+  drawable tips that load within 5 s. The PNG shows a 2×2 grid in file order.
 - **Proof.** The PNGs under `thumb/<size>pt@1x/` in the evidence folder, opened and compared with the states above.
 
 ## Gotchas
