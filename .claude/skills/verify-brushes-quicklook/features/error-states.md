@@ -11,7 +11,7 @@ never crashes either extension.
 - `error-cell` shows a dashed cell with a brush glyph, "No preview" and the reason, and the brush still counts.
 - `error-counts` shows `N brushes · M without preview` in the multi-brush header, or `· none can be previewed yet` when no brush has a preview.
 - `error-damaged` shows the warning view with "The file looks damaged or incomplete." and a Details disclosure holding the parser's message.
-- `error-partial` shows the brushes loaded when the 10 s limit stops a load, plus `N more brushes were not loaded. Previews stop loading after 10 seconds.`
+- `error-partial` shows the brushes loaded when the 10 s limit stops a load, plus `N more brushes were not loaded. Previews stop loading after 10 seconds.` (`1 more brush was` for one). The header counts those brushes as without preview.
 - `error-too-large` shows "This file is 600 MB. Files above 512 MB are not previewed." with no Details, and the thumbnail shows a brush glyph.
 - `error-no-crash` means no hostile file produces a `BrushesPreview`, `BrushesThumbnail` or `BrushesQuickLook` crash report.
 
@@ -40,7 +40,8 @@ Preconditions:
   which uses almost no disk. Run `bql thumb build.noindex/verify/fixtures/too_large.abr --size 256`
   and `bql preview build.noindex/verify/fixtures/too_large.abr`. The thumbnail
   shows the brush glyph and the preview shows the 600 MB message. `bql cleanup`
-  deletes the file.
+  deletes the file with the rest of the fixtures, so run `bql fixtures` again
+  before the next recipe.
 - **No crash.** Run `bql hostile`. It thumbnails and previews each file and
   opens it in a new `BrushesQuickLook` instance, which it captures once the
   load ends. Exit 0 with `crashed: 0`,

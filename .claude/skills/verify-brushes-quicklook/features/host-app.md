@@ -13,7 +13,7 @@ macOS registers the extensions when the app is opened for the first time.
 - `app-settings` means "Open System Settings" opens the Quick Look sheet of General > Login Items & Extensions, which lists BrushesPreview and BrushesThumbnail under BrushesQuickLook. On macOS 14 it opens the Privacy & Security > Extensions list, whose Quick Look row reads "BrushesPreview, BrushesThumbnail".
 - `app-open` means a brush file opened in the app shows a 760 × 600 window titled with the file name and the preview's content: the grid, the single-brush layout or "This file can’t be previewed".
 - `app-open-ways` covers the entry points: File > Open, "Open Brush File…", a drop on the setup window, and Open With in Finder, which `open -a` stands in for. The app is an Alternate handler: it ranks below any app that claims these types and opens them on double-click only when no other app does.
-- `app-file-menu` means the File menu has Open, Open Recent, Close, Close All and Share and no New, Save, Save As, Duplicate, Rename, Move To or Revert To, with or without a brush file open.
+- `app-file-menu` means the File menu has Open…, Open Recent, Close, Close All and Share and no New, Save, Save As, Duplicate, Rename, Move To or Revert To, with or without a brush file open.
 - `app-title` means a document window's title shows the file name and offers no rename, move, tags or lock: the title bar has no "document actions" button and a click on the title opens nothing.
 - `app-registration` means that after install, pluginkit lists exactly one enabled copy of each extension, inside `/Applications`.
 - `app-types` means the imported UTTypes route brush files to the extensions, which the thumbnail and preview features confirm.
@@ -31,14 +31,15 @@ Preconditions:
 - Baseline preconditions from the index.
 - `A=/Applications/BrushesQuickLook.app` is set in the shell.
 - File > Open and the button clicks use System Events, and `bql app` reads the app
-  through Accessibility. Both need Accessibility for the terminal.
+  through Accessibility. Both need Accessibility for the terminal. The System
+  Events calls also need Automation for System Events.
 
 - **Install and open.** Run `bql install`. The JSON lists the steps
   `build, check-build, unregister N stale paths, quit, replace, register, verify` and
   the setup window opens.
-- **Registration.** Run `bql doctor`. It exits 0, and `observed.plugins` holds
-  one `+` line for each extension, ending in the
-  `/Applications/.../PlugIns/*.appex` path.
+- **Registration.** Run `bql doctor`. It exits 0, and `observed.plugins.preview`
+  and `observed.plugins.thumbnail` each hold one entry with `election` `+` and a
+  `path` under `/Applications/BrushesQuickLook.app/Contents/PlugIns/`.
 - **Window ids.** List the app's windows with
   `osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID))).filter(w => w.kCGWindowOwnerName === "BrushesQuickLook" && w.kCGWindowLayer === 0).map(w => [w.kCGWindowNumber, w.kCGWindowName]))'`.
   The setup window is named "Brushes Quick Look". A document window is named after its file.
@@ -102,7 +103,7 @@ Preconditions:
   `open -a "$A" build.noindex/verify/fixtures/too_large.abr`. The window shows
   "This file is 600 MB. Files above 512 MB are not previewed." and RSS grows by
   a few MB, not 600 MB, because the document reads nothing itself. `bql cleanup`
-  deletes the file.
+  deletes the file with the rest of the fixtures.
 - **Types.** Run the `bql thumb` recipes from [thumbnail.md](./thumbnail.md) and
   the `bql preview` recipes from [preview.md](./preview.md) across `.abr`,
   `.brush` and `.brushset` files. A card with a badge or strip instead of a

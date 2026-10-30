@@ -1,16 +1,16 @@
 # Space-bar preview
 
 Pressing space on a brush file in Finder opens a panel that lists every brush
-in the file in file order. A multi-brush file shows a header with the format
-chip, a title and a count line, then a grid of tip cells with the brush name
-and source size. A file with one brush shows one large tip beside its name,
-size and format.
+in the file in file order. A file with one fully loaded brush shows one large
+tip beside its name, size and format. Every other file, including one with no
+brushes, shows a header with the format chip, a title and a count line, then a
+grid of tip cells with the brush name and source size.
 
 ## Sub-features
 
 - `preview-grid` shows an adaptive grid of cells that gains columns as the panel widens.
-- `preview-header-named` uses the set name as the title when it differs from the file name, with the count and format below.
-- `preview-header-count` uses the count as the title when the set has no name of its own.
+- `preview-header-named` uses the set name as the title when it differs from the file name without its extension, with the count and format below.
+- `preview-header-count` uses the count as the title when the set has no name of its own or its name equals the file name.
 - `preview-single` shows one large tip with name, size and format for a one-brush file.
 - `preview-set-line` adds `Set: <name>` below the format when a one-brush set has a name that differs from the brush name.
 - `preview-size` shows `W × H px` when the source size is known and `Size unknown` otherwise.
@@ -36,6 +36,8 @@ Preconditions:
   `2 brushes` and the subtitle is `Procreate brush set`.
 - **Single brush.** Run `bql preview $F/root_brush.brush $F/sampled_tip.abr`. Each PNG
   shows one large tip well with the name, `16 × 8 px` and the format name beside it.
+- **Size unknown.** Run `bql preview $F/missing_shape.brush`. The single-brush
+  layout shows the dashed well and `Size unknown` beside it.
 - **Small tip.** Run `bql preview $F/small_tip.abr`. The `4 × 4 px` tip stays a
   small square in the large well. It is not stretched to fill it.
 - **Finder path.** Run `bql finder $F/ordered_set.brushset`. The PNG is Finder's
@@ -51,11 +53,13 @@ Preconditions:
 - The qlmanage window may open on a second display. Capture by window id still works.
 - The capture is taken `--settle` seconds after the window appears. A PNG that
   reads "Loading brushes…" means the settle time was too short, not that the preview failed.
-- Finder's panel shows an "Open with" button for whichever app owns the
-  extension on that Mac. It is not part of the extension.
+- Finder's panel shows an "Open with" button for the default app for the file
+  type on that Mac. BrushesQuickLook is an Alternate handler, so the button
+  names another app when one claims the type. It is not part of the extension.
 - `bql` cannot resize the panel, so `preview-grid` gaining columns is a manual
   check: resize Finder's panel on a real multi-brush file.
 - No corpus file has a one-brush set with its own name, so `preview-set-line`
   has no fixture.
-- The ABR fixtures `wellformed_v6_min`, `wellformed_v6_patt` and `patt_*` parse
-  to `0 brushes`. They check that nothing breaks, not the grid.
+- The ABR fixtures `wellformed_v6_min`, `wellformed_v6_patt` and `patt_*` hold
+  only patterns. They show the `ABR` chip, the title `0 brushes`, the subtitle
+  `Photoshop brushes` and no cells.
