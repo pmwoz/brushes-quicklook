@@ -2,17 +2,18 @@
 
 Pressing space on a brush file in Finder opens a panel that lists every brush
 in the file in file order. A file with one fully loaded brush shows one large
-tip beside its name, size and format. Every other file, including one with no
-brushes, shows a header with a title and a count line, then a
-grid of tip cells with the brush name and source size.
+tip beside the format chip, its name and its size. Every other file, including
+one with no brushes, shows a header with the format chip, a title and a line
+below it, then a grid of tip cells with the brush name and source size.
 
 ## Sub-features
 
 - `preview-grid` shows an adaptive grid of cells that gains columns as the panel widens.
-- `preview-header-named` uses the set name as the title when it differs from the file name without its extension, with the count and format below.
-- `preview-header-format` uses the format name as the title, with the count below, when the set has no name of its own or its name equals the file name.
-- `preview-single` shows one large tip with name, size and format for a one-brush file. The tip well is at most 380 pt and shrinks with the panel, and the tip and the text are centred as one group.
-- `preview-set-line` adds `Set: <name>` below the format when a one-brush set has a name that differs from the brush name.
+- `preview-header-named` uses the set name as the title when it differs from the file name without its extension, with the count below.
+- `preview-header-count` uses the count as the title when the set has no name of its own or its name equals the file name. The line below appears only when a brush has no preview.
+- `preview-format-chip` shows the format as a chip, `ABR`, `BRUSH` or `BRUSHSET`, in the header and in the single-brush layout. The chip's tooltip is the format name.
+- `preview-single` shows one large tip with the format chip, the name and the size for a one-brush file. The tip well is at most 380 pt and shrinks with the panel, and the tip and the text are centred as one group.
+- `preview-set-line` adds `Set: <name>` below the size when a one-brush set has a name that differs from the brush name.
 - `preview-size` shows `W × H px` when the source size is known and `Size unknown` otherwise.
 - `preview-small-tip` keeps small tips crisp by never scaling past 2 pt per source pixel.
 - `preview-order` keeps brushes in file order, not sorted by name.
@@ -30,12 +31,12 @@ Preconditions:
 - For `bql finder`: Accessibility and Automation for Finder are granted, no Quick Look panel is open, and the user is not typing.
 
 - **Named set, order.** Run `bql preview $F/ordered_set.brushset`. The PNG shows
-  the title `Ordered`, the line `2 brushes · Procreate brush set`, and the
+  the `BRUSHSET` chip, the title `Ordered`, the line `2 brushes`, and the
   cells `B` then `A`, each `16 × 8 px`.
-- **Format title.** Run `bql preview $F/no_metadata.brushset`. The title is
-  `Procreate brush set` and the line below is `2 brushes`.
+- **Count title.** Run `bql preview $F/no_metadata.brushset`. The PNG shows the
+  `BRUSHSET` chip and the title `2 brushes`, with no line below.
 - **Single brush.** Run `bql preview $F/root_brush.brush $F/sampled_tip.abr`. Each PNG
-  shows one large tip well with the name, `16 × 8 px` and the format name beside it.
+  shows one large tip well with the format chip, the name and `16 × 8 px` beside it.
 - **Size unknown.** Run `bql preview $F/missing_shape.brush`. The single-brush
   layout shows the dashed well and `Size unknown` beside it.
 - **Small tip.** Run `bql preview $F/small_tip.abr`. The `4 × 4 px` tip stays a
@@ -61,5 +62,4 @@ Preconditions:
 - No corpus file has a one-brush set with its own name, so `preview-set-line`
   has no fixture.
 - The ABR fixtures `wellformed_v6_min`, `wellformed_v6_patt` and `patt_*` hold
-  only patterns. They show the title `Photoshop brush pack`,
-  the line `0 brushes` and no cells.
+  only patterns. They show the `ABR` chip, the title `0 brushes` and no cells.

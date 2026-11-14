@@ -62,8 +62,8 @@ Preconditions:
   "BrushesPreview, BrushesThumbnail" under Quick Look (#143).
 - **Open a file.** Run `open -a "$A" $F/zero_area_tip.abr $F/ordered_set.brushset $F/root_brush.brush $F/v2_rle_overflow.abr`.
   Four 760 × 600 windows open, named after the files. `zero_area_tip` reads
-  `2 brushes · 1 without preview`, `ordered_set` shows "Ordered" with
-  `2 brushes · Procreate brush set`, `root_brush` shows the single-brush layout
+  `2 brushes` with `1 without preview` below, `ordered_set` shows "Ordered" with
+  `2 brushes`, `root_brush` shows the single-brush layout
   with "A" and `16 × 8 px`, and `v2_rle_overflow` shows "This file can’t be
   previewed", "The file looks damaged or incomplete." and a collapsed "Details".
   `bql app --case files` passes when a launch with two files shows only their

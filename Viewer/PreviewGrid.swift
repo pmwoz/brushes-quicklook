@@ -17,16 +17,18 @@ struct PreviewGrid: View {
     }
 
     nonisolated static func header(
-        fileName: String, setName: String?, format: BrushFormat, brushes: Int, unavailable: Int
-    ) -> (title: String, subtitle: String) {
+        fileName: String, setName: String?, brushes: Int, unavailable: Int
+    ) -> (title: String, subtitle: String?) {
+        let count = "\(brushes) \(brushes == 1 ? "brush" : "brushes")"
         let withoutPreview: String? = switch unavailable {
         case 0: nil
         case brushes: "all without preview"
         default: "\(unavailable) without preview"
         }
-        let name = setName.flatMap { $0 == (fileName as NSString).deletingPathExtension ? nil : $0 }
-        let facts = ["\(brushes) \(brushes == 1 ? "brush" : "brushes")", withoutPreview, name == nil ? nil : format.style.name]
-        return (name ?? format.style.name, facts.compactMap { $0 }.joined(separator: " · "))
+        guard let setName, setName != (fileName as NSString).deletingPathExtension else {
+            return (count, withoutPreview)
+        }
+        return (setName, [count, withoutPreview].compactMap { $0 }.joined(separator: " · "))
     }
 
     nonisolated static func notReachedText(_ count: Int) -> String {
@@ -50,19 +52,24 @@ struct PreviewGrid: View {
 
     private var grid: some View {
         let header = Self.header(
-            fileName: fileName, setName: setName, format: format,
+            fileName: fileName, setName: setName,
             brushes: cells.count + notReached,
             unavailable: cells.filter { $0.image == nil }.count + notReached
         )
         return VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(header.title)
-                    .font(.title2.weight(.semibold))
-                    .lineLimit(2)
-                    .help(header.title)
-                Text(header.subtitle)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                FormatChip(format: format)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(header.title)
+                        .font(.title2.weight(.semibold))
+                        .lineLimit(2)
+                        .help(header.title)
+                    if let subtitle = header.subtitle {
+                        Text(subtitle)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -92,13 +99,14 @@ struct PreviewGrid: View {
             .frame(idealWidth: 380, maxWidth: 380, idealHeight: 380, maxHeight: 380)
             .layoutPriority(1)
         let text = VStack(alignment: .leading, spacing: 4) {
+            FormatChip(format: format)
             Text(cell.name)
                 .font(.title2.weight(.semibold))
                 .lineLimit(3)
+                .padding(.top, 8)
                 .help(cell.name)
             Group {
                 Text(cell.dimensionsText)
-                Text(format.style.name)
                 if let setName, setName != cell.name {
                     Text("Set: \(setName)")
                 }
@@ -122,6 +130,21 @@ struct PreviewGrid: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct FormatChip: View {
+    let format: BrushFormat
+
+    var body: some View {
+        Text(format.style.badge)
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color(cgColor: format.style.color), in: Capsule())
+            .help(format.style.name)
+            .accessibilityLabel(format.style.name)
     }
 }
 

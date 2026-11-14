@@ -26,8 +26,8 @@ thumbnail cannot tell whether they are damaged. Files that fail to load for any 
 A grid of brush tip shapes that adds columns as the panel widens. A file with
 a single brush shows one large tip instead, which shrinks with the panel.
 
-- A header with the set's own name, or the format name when the set has none,
-  and the brush count below it.
+- A header with the format chip and the set's own name, with the brush count
+  below it. A set with no name of its own shows the brush count as the title.
 
 - Name, tip bitmap and original raster dimensions when known. Computed tips
   and unreadable raster headers show an unknown size.
