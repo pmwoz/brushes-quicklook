@@ -49,7 +49,7 @@ Preconditions:
   `vm run --image sonoma app --case launch`. To look at the window, run
   `open "$A"` and capture its id from the list above with
   `screencapture -x -o -l <id> build.noindex/verify/evidence/host-app.png`. The
-  window is 520 × 415 pt (520 × 411 on macOS 14), and the PNG shows every line
+  window is 520 pt wide (520 × 412 on macOS 14), and the PNG shows every line
   and both buttons from `app-window`, with the path for the guest's macOS
   version.
 - **Settings button.** Run `osascript -e 'tell application "System Events" to tell process "BrushesQuickLook" to click button 1 of group 1 of window "Brushes Quick Look"'`.
