@@ -264,6 +264,11 @@ final class PreviewTests: XCTestCase {
         )
     }
 
+    func testAReasonNeverWrapsWithOneWordOnItsLastLine() {
+        XCTAssertEqual("The file has no image.".keepingLastTwoWordsTogether, "The file has no\u{00A0}image.")
+        XCTAssertEqual("Unreadable".keepingLastTwoWordsTogether, "Unreadable")
+    }
+
     private func temporaryFile(extension fileExtension: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(fileExtension)
     }

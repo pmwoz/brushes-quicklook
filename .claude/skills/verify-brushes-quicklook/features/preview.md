@@ -3,7 +3,7 @@
 Pressing space on a brush file in Finder opens a panel that lists every brush
 in the file in file order. A file with one fully loaded brush shows one large
 tip beside its name, size and format. Every other file, including one with no
-brushes, shows a header with the format chip, a title and a count line, then a
+brushes, shows a header with a title and a count line, then a
 grid of tip cells with the brush name and source size.
 
 ## Sub-features
@@ -61,5 +61,5 @@ Preconditions:
 - No corpus file has a one-brush set with its own name, so `preview-set-line`
   has no fixture.
 - The ABR fixtures `wellformed_v6_min`, `wellformed_v6_patt` and `patt_*` hold
-  only patterns. They show the `ABR` chip, the title `Photoshop brush pack`,
+  only patterns. They show the title `Photoshop brush pack`,
   the line `0 brushes` and no cells.

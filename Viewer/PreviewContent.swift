@@ -33,9 +33,8 @@ enum PreviewContent: View {
     var body: some View {
         switch self {
         case .loading:
-            ProgressView("Loading brushes…")
+            ProgressView { Text("Loading brushes…").foregroundStyle(.secondary) }
                 .controlSize(.small)
-                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(nsColor: .windowBackgroundColor))
         case .grid(let grid): grid

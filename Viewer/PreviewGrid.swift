@@ -55,17 +55,14 @@ struct PreviewGrid: View {
             unavailable: cells.filter { $0.image == nil }.count + notReached
         )
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
-                FormatChip(format: format)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(header.title)
-                        .font(.title2.weight(.semibold))
-                        .lineLimit(2)
-                        .help(header.title)
-                    Text(header.subtitle)
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(header.title)
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(2)
+                    .help(header.title)
+                Text(header.subtitle)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -95,11 +92,9 @@ struct PreviewGrid: View {
             .frame(idealWidth: 380, maxWidth: 380, idealHeight: 380, maxHeight: 380)
             .layoutPriority(1)
         let text = VStack(alignment: .leading, spacing: 4) {
-            FormatChip(format: format)
             Text(cell.name)
                 .font(.title2.weight(.semibold))
                 .lineLimit(3)
-                .padding(.top, 8)
                 .help(cell.name)
             Group {
                 Text(cell.dimensionsText)
@@ -127,19 +122,6 @@ struct PreviewGrid: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
-    }
-}
-
-private struct FormatChip: View {
-    let format: BrushFormat
-
-    var body: some View {
-        Text(format.style.badge)
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Color(cgColor: format.style.color), in: Capsule())
     }
 }
 
@@ -197,17 +179,16 @@ private struct TipWell: View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         if let image = cell.image {
             // Small source tips stay crisp: never more than 2 pt per source pixel.
-            let cap = cell.sourceDimensions.map {
-                CGSize(
-                    width: CGFloat($0.width) * BrushTipImage.maxPointsPerSourcePixel,
-                    height: CGFloat($0.height) * BrushTipImage.maxPointsPerSourcePixel
-                )
-            }
+            let sourcePixels = cell.sourceDimensions.map { CGSize(width: CGFloat($0.width), height: CGFloat($0.height)) }
+                ?? CGSize(width: image.width, height: image.height)
             Image(decorative: image, scale: 1)
                 .renderingMode(.template)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: cap?.width, maxHeight: cap?.height)
+                .frame(
+                    maxWidth: sourcePixels.width * BrushTipImage.maxPointsPerSourcePixel,
+                    maxHeight: sourcePixels.height * BrushTipImage.maxPointsPerSourcePixel
+                )
                 .padding(tipPadding)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.primary.opacity(0.06), in: shape)
@@ -219,7 +200,7 @@ private struct TipWell: View {
                     .opacity(0.6)
                 Text("No preview")
                     .font(.callout.weight(.medium))
-                Text(cell.unavailableReason)
+                Text(cell.unavailableReason.keepingLastTwoWordsTogether)
                     .font(.caption)
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
@@ -230,5 +211,12 @@ private struct TipWell: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
         }
+    }
+}
+
+extension String {
+    var keepingLastTwoWordsTogether: String {
+        guard let lastSpace = lastIndex(of: " ") else { return self }
+        return replacingCharacters(in: lastSpace...lastSpace, with: "\u{00A0}")
     }
 }
