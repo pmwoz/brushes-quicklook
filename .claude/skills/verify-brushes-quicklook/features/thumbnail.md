@@ -10,7 +10,8 @@ show a brush glyph. Unreadable files show a warning glyph.
 
 - `thumb-grid` shows a 2×2 grid of the first four drawable tips at 64 pt and up.
 - `thumb-single` shows one tip when the file has one to three drawable tips, or at any size below 64 pt.
-- `thumb-badge` shows the format pill at 64 pt and up.
+- `thumb-badge` shows the format pill at 64 pt and up. The pill is at least 13 pt tall, so its text is at least 7 pt, and it stays 4 pt from the card's sides.
+- `thumb-small-tip` keeps small tips crisp by never scaling past 2 pt per source pixel, as the preview does.
 - `thumb-strip` replaces the pill with a coloured strip along the bottom edge below 64 pt.
 - `thumb-no-tips` shows a brush glyph for a file that parses with no drawable tip, a file above 512 MB, or a file that loads no brush within 5 s.
 - `thumb-unreadable` shows a warning glyph for a damaged file.

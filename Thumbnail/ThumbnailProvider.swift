@@ -15,7 +15,7 @@ final class ThumbnailProvider: QLThumbnailProvider {
         let size = CGSize(width: side, height: side)
         let reply = QLThumbnailReply(contextSize: size, drawing: { context in
             // The context is sized in pixels with an identity transform, not in points.
-            thumbnail.draw(in: context, size: context.boundingBoxOfClipPath.size)
+            thumbnail.draw(in: context, pixelSize: context.boundingBoxOfClipPath.size)
             return true
         })
         handler(reply, nil)

@@ -249,10 +249,22 @@ final class PreviewTests: XCTestCase {
         XCTAssertEqual(PreviewGrid.notReachedText(1), "1 more brush was not loaded. Previews stop loading after 10 seconds.")
     }
 
-    func testCountsNameBrushesAndThoseWithoutPreview() {
-        XCTAssertEqual(PreviewGrid.countsText(brushes: 1, unavailable: 0), "1 brush")
-        XCTAssertEqual(PreviewGrid.countsText(brushes: 26, unavailable: 3), "26 brushes · 3 without preview")
-        XCTAssertEqual(PreviewGrid.countsText(brushes: 16, unavailable: 16), "16 brushes · none can be previewed yet")
+    func testHeaderTitleIsTheSetsOwnNameOrTheBrushCount() {
+        func header(_ setName: String?, brushes: Int, unavailable: Int) -> [String?] {
+            let header = PreviewGrid.header(fileName: "Inks.abr", setName: setName, brushes: brushes, unavailable: unavailable)
+            return [header.title, header.subtitle]
+        }
+        XCTAssertEqual(header(nil, brushes: 1, unavailable: 0), ["1 brush", nil])
+        XCTAssertEqual(header(nil, brushes: 26, unavailable: 3), ["26 brushes", "3 without preview"])
+        XCTAssertEqual(header(nil, brushes: 16, unavailable: 16), ["16 brushes", "all without preview"])
+        XCTAssertEqual(header("Inks", brushes: 2, unavailable: 0), ["2 brushes", nil], "A set named after its file has no name of its own")
+        XCTAssertEqual(header("Washes", brushes: 12, unavailable: 0), ["Washes", "12 brushes"])
+        XCTAssertEqual(header("Washes", brushes: 12, unavailable: 1), ["Washes", "12 brushes · 1 without preview"])
+    }
+
+    func testAReasonNeverWrapsWithOneWordOnItsLastLine() {
+        XCTAssertEqual("The file has no image.".keepingLastTwoWordsTogether, "The file has no\u{00A0}image.")
+        XCTAssertEqual("Unreadable".keepingLastTwoWordsTogether, "Unreadable")
     }
 
     private func temporaryFile(extension fileExtension: String) -> URL {

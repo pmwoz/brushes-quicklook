@@ -44,16 +44,20 @@ fn c_string(value: String) -> CString {
     CString::new(value.replace('\0', "\u{fffd}")).expect("interior NULs were replaced")
 }
 
+const DAMAGED_SHAPE_IMAGE: &str = "This brush’s shape image is damaged.";
+
 fn reason_text(reason: UnavailableReason) -> String {
     match reason {
         UnavailableReason::NoShapePng => "This brush has no shape image.".to_owned(),
         UnavailableReason::UnsupportedTipKind(kind) => match tip_kind_label(&kind) {
-            Some(label) => format!("Computed Photoshop tip ({label}). Not drawn yet."),
-            None => "Computed Photoshop tip. Not drawn yet.".to_owned(),
+            Some(label) => {
+                format!("{label} is a computed tip with no stored image.")
+            }
+            None => "This is a computed tip with no stored image.".to_owned(),
         },
-        UnavailableReason::Corrupt(message) => message,
+        UnavailableReason::Corrupt(_) => DAMAGED_SHAPE_IMAGE.to_owned(),
         UnavailableReason::MissingTip { .. } => {
-            "This brush's shape image is missing from the file.".to_owned()
+            "This brush’s shape image is missing from the file.".to_owned()
         }
         UnavailableReason::TooLarge { width, height } => {
             format!("The shape image is {width} × {height} px, too large to preview.")
@@ -101,15 +105,7 @@ fn convert_entry(entry: PreviewEntry) -> Entry {
         {
             (Some(bitmap), None)
         }
-        TipPreview::Available(bitmap) => (
-            None,
-            Some(c_string(format!(
-                "malformed tip bitmap: {} bytes for {}x{} px",
-                bitmap.data.len(),
-                bitmap.width,
-                bitmap.height
-            ))),
-        ),
+        TipPreview::Available(_) => (None, Some(c_string(DAMAGED_SHAPE_IMAGE.to_owned()))),
         TipPreview::Unavailable(reason) => (None, Some(c_string(reason_text(reason)))),
     };
     Entry {
@@ -489,7 +485,7 @@ mod tests {
         });
         assert_eq!(entry.source_dimensions, SourceDimensions::new(800, 600));
         assert!(entry.tip.is_none());
-        assert!(entry.reason.unwrap().to_str().unwrap().contains("3 bytes"));
+        assert_eq!(entry.reason.unwrap().to_str().unwrap(), DAMAGED_SHAPE_IMAGE);
     }
 
     #[test]
@@ -502,34 +498,34 @@ mod tests {
             ),
             (
                 computed("RoundPoint"),
-                "Computed Photoshop tip (Round Point). Not drawn yet.",
+                "Round Point is a computed tip with no stored image.",
             ),
             (
                 computed("AirbrushTip"),
-                "Computed Photoshop tip (Airbrush). Not drawn yet.",
+                "Airbrush is a computed tip with no stored image.",
             ),
             (
                 computed("ErodibleFlat"),
-                "Computed Photoshop tip (Erodible Flat). Not drawn yet.",
+                "Erodible Flat is a computed tip with no stored image.",
             ),
             (
                 computed("bristle"),
-                "Computed Photoshop tip (Bristle). Not drawn yet.",
+                "Bristle is a computed tip with no stored image.",
             ),
             (
                 computed("computed"),
-                "Computed Photoshop tip. Not drawn yet.",
+                "This is a computed tip with no stored image.",
             ),
             (
                 computed("shape tip"),
-                "Computed Photoshop tip. Not drawn yet.",
+                "This is a computed tip with no stored image.",
             ),
-            (computed(""), "Computed Photoshop tip. Not drawn yet."),
+            (computed(""), "This is a computed tip with no stored image."),
             (
                 UnavailableReason::MissingTip {
                     uuid: "0f1e2d3c".to_owned(),
                 },
-                "This brush's shape image is missing from the file.",
+                "This brush’s shape image is missing from the file.",
             ),
             (
                 UnavailableReason::TooLarge {
@@ -544,7 +540,7 @@ mod tests {
             ),
             (
                 UnavailableReason::Corrupt("tip has zero area".to_owned()),
-                "tip has zero area",
+                "This brush’s shape image is damaged.",
             ),
         ] {
             assert_eq!(reason_text(reason), expected);

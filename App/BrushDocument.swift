@@ -16,32 +16,18 @@ struct BrushDocument: FileDocument {
 }
 
 struct BrushDocumentView: View {
-    private enum Phase {
-        case loading
-        case loaded(PreviewContent)
-    }
-
     /// One load at a time, so opening many files at once does not hold many of them in memory together.
     private static let loads = DispatchQueue(label: "pl.esdesign.brushesquicklook.document-load", qos: .userInitiated)
 
     let url: URL
-    @State private var phase = Phase.loading
+    @State private var content = PreviewContent.loading
 
     var body: some View {
-        Group {
-            switch phase {
-            case .loading:
-                Text("Loading brushes…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(nsColor: .windowBackgroundColor))
-            case .loaded(let content):
-                content
+        content
+            .frame(minWidth: 480, minHeight: 360)
+            .task(id: url) {
+                content = .loading
+                content = PreviewContent(await PreviewContent.loadGrid(url, on: Self.loads))
             }
-        }
-        .frame(minWidth: 480, minHeight: 360)
-        .task(id: url) {
-            phase = .loading
-            phase = .loaded(PreviewContent(await PreviewContent.loadGrid(url, on: Self.loads)))
-        }
     }
 }

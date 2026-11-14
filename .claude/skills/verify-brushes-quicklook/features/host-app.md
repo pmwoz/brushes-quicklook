@@ -9,7 +9,7 @@ macOS registers the extensions when the app is opened for the first time.
 
 ## Sub-features
 
-- `app-window` shows the app icon, "Brushes Quick Look", one line on what the app does, one line on turning on BrushesPreview and BrushesThumbnail with the System Settings path (General > Login Items & Extensions > Quick Look, or Privacy & Security > Extensions > Quick Look on macOS 14), the buttons "Open System Settings" and "Open Brush File…", and a line about dropping files on the window.
+- `app-window` shows the app icon, "Brushes Quick Look", one line on what the app does, one line on turning on BrushesPreview and BrushesThumbnail, the path below it (System Settings › General › Login Items & Extensions › Quick Look, or System Settings › Privacy & Security › Extensions › Quick Look on macOS 14), the buttons "Open System Settings" and "Open Brush File…", and a line about dropping files on the window.
 - `app-settings` means "Open System Settings" opens the Quick Look sheet of General > Login Items & Extensions, which lists BrushesPreview and BrushesThumbnail under BrushesQuickLook. On macOS 14 it opens the Privacy & Security > Extensions list, whose Quick Look row reads "BrushesPreview, BrushesThumbnail".
 - `app-open` means a brush file opened in the app shows a 760 × 600 window titled with the file name and the preview's content: the grid, the single-brush layout or "This file can’t be previewed".
 - `app-open-ways` covers the entry points: File > Open, "Open Brush File…", a drop on the setup window, and Open With in Finder, which `open -a` stands in for. The app is an Alternate handler: it ranks below any app that claims these types and opens them on double-click only when no other app does.
@@ -49,7 +49,7 @@ Preconditions:
   `vm run --image sonoma app --case launch`. To look at the window, run
   `open "$A"` and capture its id from the list above with
   `screencapture -x -o -l <id> build.noindex/verify/evidence/host-app.png`. The
-  window is 520 × 415 pt (520 × 411 on macOS 14), and the PNG shows every line
+  window is 520 pt wide (520 × 412 on macOS 14), and the PNG shows every line
   and both buttons from `app-window`, with the path for the guest's macOS
   version.
 - **Settings button.** Run `osascript -e 'tell application "System Events" to tell process "BrushesQuickLook" to click button 1 of group 1 of window "Brushes Quick Look"'`.
@@ -62,8 +62,8 @@ Preconditions:
   "BrushesPreview, BrushesThumbnail" under Quick Look (#143).
 - **Open a file.** Run `open -a "$A" $F/zero_area_tip.abr $F/ordered_set.brushset $F/root_brush.brush $F/v2_rle_overflow.abr`.
   Four 760 × 600 windows open, named after the files. `zero_area_tip` reads
-  `2 brushes · 1 without preview`, `ordered_set` shows "Ordered" with
-  `2 brushes · Procreate brush set`, `root_brush` shows the single-brush layout
+  `2 brushes` with `1 without preview` below, `ordered_set` shows "Ordered" with
+  `2 brushes`, `root_brush` shows the single-brush layout
   with "A" and `16 × 8 px`, and `v2_rle_overflow` shows "This file can’t be
   previewed", "The file looks damaged or incomplete." and a collapsed "Details".
   `bql app --case files` passes when a launch with two files shows only their
