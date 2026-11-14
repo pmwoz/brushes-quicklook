@@ -1,6 +1,7 @@
 import SwiftUI
 
 enum PreviewContent: View {
+    case loading
     case grid(PreviewGrid)
     case failure(PreviewFailure)
 
@@ -31,6 +32,12 @@ enum PreviewContent: View {
 
     var body: some View {
         switch self {
+        case .loading:
+            ProgressView("Loading brushes…")
+                .controlSize(.small)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .windowBackgroundColor))
         case .grid(let grid): grid
         case .failure(let failure): failure
         }

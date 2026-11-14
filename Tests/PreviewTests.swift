@@ -249,10 +249,19 @@ final class PreviewTests: XCTestCase {
         XCTAssertEqual(PreviewGrid.notReachedText(1), "1 more brush was not loaded. Previews stop loading after 10 seconds.")
     }
 
-    func testCountsNameBrushesAndThoseWithoutPreview() {
-        XCTAssertEqual(PreviewGrid.countsText(brushes: 1, unavailable: 0), "1 brush")
-        XCTAssertEqual(PreviewGrid.countsText(brushes: 26, unavailable: 3), "26 brushes · 3 without preview")
-        XCTAssertEqual(PreviewGrid.countsText(brushes: 16, unavailable: 16), "16 brushes · none can be previewed yet")
+    func testHeaderTitleNamesTheFileAndTheLineBelowStartsWithTheCount() {
+        func header(_ setName: String?, _ format: BrushFormat, brushes: Int, unavailable: Int) -> [String] {
+            let header = PreviewGrid.header(fileName: "Inks.abr", setName: setName, format: format, brushes: brushes, unavailable: unavailable)
+            return [header.title, header.subtitle]
+        }
+        XCTAssertEqual(header(nil, .abr, brushes: 1, unavailable: 0), ["Photoshop brush pack", "1 brush"])
+        XCTAssertEqual(header(nil, .abr, brushes: 26, unavailable: 3), ["Photoshop brush pack", "26 brushes · 3 without preview"])
+        XCTAssertEqual(header(nil, .abr, brushes: 16, unavailable: 16), ["Photoshop brush pack", "16 brushes · all without preview"])
+        XCTAssertEqual(header("Inks", .abr, brushes: 2, unavailable: 0), ["Photoshop brush pack", "2 brushes"], "A set named after its file has no name of its own")
+        XCTAssertEqual(
+            header("Washes", .brushset, brushes: 12, unavailable: 1),
+            ["Washes", "12 brushes · 1 without preview · Procreate brush set"]
+        )
     }
 
     private func temporaryFile(extension fileExtension: String) -> URL {

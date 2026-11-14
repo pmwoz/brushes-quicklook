@@ -23,9 +23,7 @@ final class PreviewViewController: NSViewController, @preconcurrency QLPreviewin
         request = (id, completionHandler)
         preview = nil
         view.subviews.forEach { $0.removeFromSuperview() }
-        let loading = NSTextField(labelWithString: "Loading brushes…")
-        loading.alignment = .center
-        install(loading)
+        install(NSHostingView(rootView: PreviewContent.loading))
         previous?.completion(NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError))
         return id
     }

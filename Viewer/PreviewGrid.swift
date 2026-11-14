@@ -16,11 +16,17 @@ struct PreviewGrid: View {
         notReached = set.notReached
     }
 
-    nonisolated static func countsText(brushes: Int, unavailable: Int) -> String {
-        let total = "\(brushes) \(brushes == 1 ? "brush" : "brushes")"
-        if unavailable == 0 { return total }
-        if unavailable == brushes { return "\(total) · none can be previewed yet" }
-        return "\(total) · \(unavailable) without preview"
+    nonisolated static func header(
+        fileName: String, setName: String?, format: BrushFormat, brushes: Int, unavailable: Int
+    ) -> (title: String, subtitle: String) {
+        let withoutPreview: String? = switch unavailable {
+        case 0: nil
+        case brushes: "all without preview"
+        default: "\(unavailable) without preview"
+        }
+        let name = setName.flatMap { $0 == (fileName as NSString).deletingPathExtension ? nil : $0 }
+        let facts = ["\(brushes) \(brushes == 1 ? "brush" : "brushes")", withoutPreview, name == nil ? nil : format.style.name]
+        return (name ?? format.style.name, facts.compactMap { $0 }.joined(separator: " · "))
     }
 
     nonisolated static func notReachedText(_ count: Int) -> String {
@@ -43,28 +49,26 @@ struct PreviewGrid: View {
     }
 
     private var grid: some View {
-        let named = setName.map { $0 != (fileName as NSString).deletingPathExtension } ?? false
-        let counts = Self.countsText(
+        let header = Self.header(
+            fileName: fileName, setName: setName, format: format,
             brushes: cells.count + notReached,
             unavailable: cells.filter { $0.image == nil }.count + notReached
         )
-        let title = named ? setName ?? fileName : counts
-        let subtitle = named ? "\(counts) · \(format.style.name)" : format.style.name
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
                 FormatChip(format: format)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(header.title)
                         .font(.title2.weight(.semibold))
                         .lineLimit(2)
-                        .help(title)
-                    Text(subtitle)
-                        .font(.subheadline)
+                        .help(header.title)
+                    Text(header.subtitle)
+                        .font(.body)
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding([.top, .horizontal], 20)
-            .padding(.bottom, 16)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
             Divider()
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 16, alignment: .top)], spacing: 16) {
@@ -85,28 +89,43 @@ struct PreviewGrid: View {
     }
 
     private func single(_ cell: BrushPreviewCell) -> some View {
-        HStack(spacing: 28) {
-            TipWell(cell: cell, cornerRadius: 12, tipPadding: 28)
-                .frame(width: 380, height: 380)
-            VStack(alignment: .leading, spacing: 4) {
-                FormatChip(format: format)
-                Text(cell.name)
-                    .font(.title2.weight(.semibold))
-                    .padding(.top, 12)
-                Group {
-                    Text(cell.dimensionsText)
-                    Text(format.style.name)
-                    if let setName, setName != cell.name {
-                        Text("Set: \(setName)")
-                    }
+        // ViewThatFits measures each branch at its ideal size, so the well states the size it wants.
+        let well = TipWell(cell: cell, cornerRadius: 12, tipPadding: 28)
+            .aspectRatio(1, contentMode: .fit)
+            .frame(idealWidth: 380, maxWidth: 380, idealHeight: 380, maxHeight: 380)
+            .layoutPriority(1)
+        let text = VStack(alignment: .leading, spacing: 4) {
+            FormatChip(format: format)
+            Text(cell.name)
+                .font(.title2.weight(.semibold))
+                .lineLimit(3)
+                .padding(.top, 8)
+                .help(cell.name)
+            Group {
+                Text(cell.dimensionsText)
+                Text(format.style.name)
+                if let setName, setName != cell.name {
+                    Text("Set: \(setName)")
                 }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .font(.body)
+            .foregroundStyle(.secondary)
         }
-        .padding(28)
-        .frame(maxHeight: .infinity)
+        let textOnFullLines = text.fixedSize(horizontal: true, vertical: false)
+        let textWrappedBesideSmallerWell = text.frame(minWidth: 160, alignment: .leading)
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 24) {
+                well
+                textOnFullLines
+            }
+            HStack(spacing: 24) {
+                well
+                textWrappedBesideSmallerWell
+            }
+        }
+        .frame(maxWidth: 720)
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
     }
 }
@@ -118,9 +137,9 @@ private struct FormatChip: View {
         Text(format.style.badge)
             .font(.system(size: 10, weight: .bold))
             .foregroundStyle(.white)
-            .padding(.horizontal, 7)
+            .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(Color(cgColor: format.style.color), in: RoundedRectangle(cornerRadius: 5))
+            .background(Color(cgColor: format.style.color), in: Capsule())
     }
 }
 
@@ -149,7 +168,7 @@ struct BrushPreviewCell: View {
             Text(name)
                 .font(.callout.weight(.medium))
                 .lineLimit(2)
-                .padding(.top, 10)
+                .padding(.top, 8)
                 .help(name)
             Text(dimensionsText)
                 .font(.caption)
@@ -175,10 +194,15 @@ private struct TipWell: View {
     let tipPadding: CGFloat
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius)
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         if let image = cell.image {
             // Small source tips stay crisp: never more than 2 pt per source pixel.
-            let cap = cell.sourceDimensions.map { CGSize(width: CGFloat($0.width) * 2, height: CGFloat($0.height) * 2) }
+            let cap = cell.sourceDimensions.map {
+                CGSize(
+                    width: CGFloat($0.width) * BrushTipImage.maxPointsPerSourcePixel,
+                    height: CGFloat($0.height) * BrushTipImage.maxPointsPerSourcePixel
+                )
+            }
             Image(decorative: image, scale: 1)
                 .renderingMode(.template)
                 .resizable()

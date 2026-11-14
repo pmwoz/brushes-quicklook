@@ -10,8 +10,8 @@ grid of tip cells with the brush name and source size.
 
 - `preview-grid` shows an adaptive grid of cells that gains columns as the panel widens.
 - `preview-header-named` uses the set name as the title when it differs from the file name without its extension, with the count and format below.
-- `preview-header-count` uses the count as the title when the set has no name of its own or its name equals the file name.
-- `preview-single` shows one large tip with name, size and format for a one-brush file.
+- `preview-header-format` uses the format name as the title, with the count below, when the set has no name of its own or its name equals the file name.
+- `preview-single` shows one large tip with name, size and format for a one-brush file. The tip well is at most 380 pt and shrinks with the panel, and the tip and the text are centred as one group.
 - `preview-set-line` adds `Set: <name>` below the format when a one-brush set has a name that differs from the brush name.
 - `preview-size` shows `W × H px` when the source size is known and `Size unknown` otherwise.
 - `preview-small-tip` keeps small tips crisp by never scaling past 2 pt per source pixel.
@@ -32,8 +32,8 @@ Preconditions:
 - **Named set, order.** Run `bql preview $F/ordered_set.brushset`. The PNG shows
   the title `Ordered`, the line `2 brushes · Procreate brush set`, and the
   cells `B` then `A`, each `16 × 8 px`.
-- **Count title.** Run `bql preview $F/no_metadata.brushset`. The title is
-  `2 brushes` and the subtitle is `Procreate brush set`.
+- **Format title.** Run `bql preview $F/no_metadata.brushset`. The title is
+  `Procreate brush set` and the line below is `2 brushes`.
 - **Single brush.** Run `bql preview $F/root_brush.brush $F/sampled_tip.abr`. Each PNG
   shows one large tip well with the name, `16 × 8 px` and the format name beside it.
 - **Size unknown.** Run `bql preview $F/missing_shape.brush`. The single-brush
@@ -52,7 +52,7 @@ Preconditions:
 - The qlmanage window title carries `[DEBUG]`. That comes from qlmanage, not the extension.
 - The qlmanage window may open on a second display. Capture by window id still works.
 - The capture is taken `--settle` seconds after the window appears. A PNG that
-  reads "Loading brushes…" means the settle time was too short, not that the preview failed.
+  shows a spinner above "Loading brushes…" means the settle time was too short, not that the preview failed.
 - Finder's panel shows an "Open with" button for the default app for the file
   type on that Mac. BrushesQuickLook is an Alternate handler, so the button
   names another app when one claims the type. It is not part of the extension.
@@ -61,5 +61,5 @@ Preconditions:
 - No corpus file has a one-brush set with its own name, so `preview-set-line`
   has no fixture.
 - The ABR fixtures `wellformed_v6_min`, `wellformed_v6_patt` and `patt_*` hold
-  only patterns. They show the `ABR` chip, the title `0 brushes`, the subtitle
-  `Photoshop brushes` and no cells.
+  only patterns. They show the `ABR` chip, the title `Photoshop brush pack`,
+  the line `0 brushes` and no cells.

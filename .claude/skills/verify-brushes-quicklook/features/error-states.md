@@ -9,7 +9,7 @@ never crashes either extension.
 ## Sub-features
 
 - `error-cell` shows a dashed cell with a brush glyph, "No preview" and the reason, and the brush still counts.
-- `error-counts` shows `N brushes · M without preview` in the multi-brush header, or `· none can be previewed yet` when no brush has a preview.
+- `error-counts` shows `N brushes · M without preview` in the multi-brush header, or `· all without preview` when no brush has a preview.
 - `error-damaged` shows the warning view with "The file looks damaged or incomplete." and a Details disclosure holding the parser's message.
 - `error-partial` shows the brushes loaded when the 10 s limit stops a load, plus `N more brushes were not loaded. Previews stop loading after 10 seconds.` (`1 more brush was` for one). The header counts those brushes as without preview.
 - `error-too-large` shows "This file is 600 MB. Files above 512 MB are not previewed." with no Details, and the thumbnail shows a brush glyph.
@@ -27,7 +27,7 @@ Preconditions:
 - Baseline preconditions from the index.
 
 - **Cells with reasons.** Run `bql preview $F/bad_shapes.brushset $F/zero_area_tip.abr`.
-  `bad_shapes` reads `2 brushes · none can be previewed yet` and its cells say
+  `bad_shapes` reads `2 brushes · all without preview` and its cells say
   "This brush has no shape image." and "failed to decode Shape.png…".
   `zero_area_tip` reads `2 brushes · 1 without preview`, with one "tip has zero area" cell.
 - **Single-brush cell.** Run `bql preview $F/missing_shape.brush $F/oversized_png.brush $F/deep_archive.brush $F/corrupt_shape.brush`.

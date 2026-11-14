@@ -121,11 +121,24 @@ final class ThumbnailTests: XCTestCase {
     }
 
     func testPillIsFilledWithTheFormatColourAt128Points() throws {
-        for (format, expected) in [(BrushFormat.abr, [47, 111, 237, 255]), (.brushset, [233, 105, 44, 255])] {
+        for (format, expected) in [(BrushFormat.abr, [47, 111, 237, 255]), (.brushset, [199, 77, 20, 255])] {
             let context = try draw(BrushThumbnail(format: format, tips: [], size: size), pixels: 128)
             for (actual, expected) in zip(try pixel(context, x: 64, y: 15), expected) {
                 XCTAssertEqual(Int(actual), expected, accuracy: 1, "\(format)")
             }
+        }
+    }
+
+    func testWhiteBadgeTextReaches4Point5To1ContrastOnEveryFormatColour() throws {
+        func luminance(_ color: CGColor) throws -> Double {
+            let linear = try XCTUnwrap(color.components).prefix(3).map { component -> Double in
+                let value = Double(component)
+                return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+        }
+        for format in [BrushFormat.abr, .brush, .brushset] {
+            XCTAssertGreaterThanOrEqual(1.05 / (try luminance(format.style.color) + 0.05), 4.5, "\(format)")
         }
     }
 

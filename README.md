@@ -22,7 +22,10 @@ thumbnail cannot tell whether they are damaged. Files that fail to load for any 
 ## What the preview shows
 
 A grid of brush tip shapes that adds columns as the panel widens. A file with
-a single brush shows one large tip instead.
+a single brush shows one large tip instead, which shrinks with the panel.
+
+- A header with the set's own name, or the format name when the set has none,
+  and the brush count below it.
 
 - Name, tip bitmap and original raster dimensions when known. Computed tips
   and unreadable raster headers show an unknown size.

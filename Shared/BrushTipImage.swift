@@ -1,6 +1,8 @@
 import AppKit
 
 enum BrushTipImage {
+    static let maxPointsPerSourcePixel: CGFloat = 2
+
     /// Wraps the coverage bytes as an 8-bit image mask backed by the tip's own storage,
     /// so no per-pixel expansion happens. A mask paints the current fill colour where the
     /// sample is 0, so the decode array inverts it: 255 = full ink, 0 = transparent.

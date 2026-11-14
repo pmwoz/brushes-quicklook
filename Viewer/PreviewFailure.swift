@@ -25,16 +25,16 @@ struct PreviewFailure: View {
                 .padding(.bottom, 8)
                 .accessibilityHidden(true)
             Text("This file can’t be previewed")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.title2.weight(.semibold))
             Text(message)
-                .font(.system(size: 13))
+                .font(.body)
                 .foregroundStyle(.secondary)
                 .lineSpacing(2)
                 .frame(maxWidth: 420)
             if let details {
                 DisclosureGroup("Details") {
                     Text(details)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.system(.subheadline, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.leading)
                         .textSelection(.enabled)
@@ -43,7 +43,7 @@ struct PreviewFailure: View {
                         .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
                 }
                 .disclosureGroupStyle(CenteredDisclosure())
-                .font(.system(size: 12))
+                .font(.callout)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 520)
                 .padding(.top, 14)
