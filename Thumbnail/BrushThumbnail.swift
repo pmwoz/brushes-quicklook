@@ -27,6 +27,8 @@ struct BrushThumbnail {
     }
 
     static let maxTips = 4
+    static let minimumPillHeight: CGFloat = 13
+    static let badgeSideMargin: CGFloat = 4
 
     private static func isLarge(_ size: CGSize) -> Bool {
         min(size.width, size.height) >= 64
@@ -39,6 +41,7 @@ struct BrushThumbnail {
     let format: BrushFormat
     let badge: Badge
     let layout: Layout
+    let pointSide: CGFloat
 
     init(format: BrushFormat, tips: [BrushTip], size: CGSize) {
         let images = Array(tips.lazy.compactMap { BrushTipImage.make(from: $0) }.prefix(Self.tipCount(for: size)))
@@ -54,6 +57,7 @@ struct BrushThumbnail {
 
     private init(format: BrushFormat, layout: Layout, size: CGSize) {
         self.format = format
+        pointSide = min(size.width, size.height)
         badge = Self.isLarge(size) ? .pill : .strip
         self.layout = layout
     }
@@ -80,11 +84,12 @@ struct BrushThumbnail {
         return thumbnail
     }
 
-    func draw(in context: CGContext, size: CGSize) {
+    func draw(in context: CGContext, pixelSize: CGSize) {
         context.saveGState()
         defer { context.restoreGState() }
-        let side = min(size.width, size.height)
-        let card = CGRect(origin: .zero, size: size).insetBy(dx: side * 0.06, dy: side * 0.06)
+        let side = min(pixelSize.width, pixelSize.height)
+        let pixelsPerPoint = side / pointSide
+        let card = CGRect(origin: .zero, size: pixelSize).insetBy(dx: side * 0.06, dy: side * 0.06)
         let cardShape = CGPath(roundedRect: card, cornerWidth: side * 0.06, cornerHeight: side * 0.06, transform: nil)
         context.setFillColor(CGColor(gray: 1, alpha: 1))
         context.setShadow(offset: CGSize(width: 0, height: -side * 0.01), blur: side * 0.02,
@@ -93,7 +98,7 @@ struct BrushThumbnail {
         context.fillPath()
         context.setShadow(offset: .zero, blur: 0, color: nil)
 
-        let pillHeight = side * 0.14
+        let pillHeight = max(side * 0.14, Self.minimumPillHeight * pixelsPerPoint)
         let stripHeight = max(2, side * 0.09)
         let reserved = switch badge {
         case .pill: pillHeight + side * 0.04
@@ -107,7 +112,10 @@ struct BrushThumbnail {
         context.interpolationQuality = .high
 
         func fit(_ image: CGImage, in rect: CGRect) {
-            let scale = min(rect.width / CGFloat(image.width), rect.height / CGFloat(image.height))
+            let scale = min(
+                rect.width / CGFloat(image.width), rect.height / CGFloat(image.height),
+                BrushTipImage.maxPointsPerSourcePixel * pixelsPerPoint
+            )
             let width = CGFloat(image.width) * scale
             let height = CGFloat(image.height) * scale
             context.draw(image, in: CGRect(x: rect.midX - width / 2, y: rect.midY - height / 2, width: width, height: height))
@@ -145,10 +153,16 @@ struct BrushThumbnail {
         context.setFillColor(style.color)
         switch badge {
         case .pill:
-            let font = NSFont.systemFont(ofSize: pillHeight * 0.55, weight: .bold)
-            let text = NSAttributedString(string: style.badge, attributes: [.font: font, .foregroundColor: NSColor.white])
-            let line = CTLineCreateWithAttributedString(text)
-            let bounds = CTLineGetImageBounds(line, context)
+            func measured(_ width: NSFont.Width) -> (line: CTLine, bounds: CGRect) {
+                let font = NSFont.systemFont(ofSize: pillHeight * 0.55, weight: .bold, width: width)
+                let text = NSAttributedString(string: style.badge, attributes: [.font: font, .foregroundColor: NSColor.white])
+                let line = CTLineCreateWithAttributedString(text)
+                return (line, CTLineGetImageBounds(line, context))
+            }
+            var (line, bounds) = measured(.standard)
+            if bounds.width + pillHeight > card.width - 2 * Self.badgeSideMargin * pixelsPerPoint {
+                (line, bounds) = measured(.condensed)
+            }
             let pill = CGRect(
                 x: card.midX - (bounds.width + pillHeight) / 2, y: card.minY + side * 0.04,
                 width: bounds.width + pillHeight, height: pillHeight
@@ -182,7 +196,7 @@ struct BrushThumbnail {
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
         image.draw(
             in: CGRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height),
-            from: .zero, operation: .sourceOver, fraction: 0.22
+            from: .zero, operation: .sourceOver, fraction: 0.45
         )
     }
 }

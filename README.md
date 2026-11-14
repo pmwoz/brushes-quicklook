@@ -13,8 +13,10 @@ brush tips with a format badge.
 A 2×2 grid of the first four available tips with a format badge, blue for
 Photoshop and orange for Procreate. Fewer than four tips or icons smaller than
 64 points on either side show a single tip. Below 64 points a colour strip
-along the bottom edge replaces the badge. Tips are decoded at the icon's pixel
-size, up to 1024 px, so a 512 point icon on a Retina display stays sharp.
+along the bottom edge replaces the badge. The badge text is never smaller than
+7 points. Tips are decoded at the icon's pixel size, up to 1024 px, so a 512
+point icon on a Retina display stays sharp. Small tips are not enlarged past 2
+points per source pixel.
 Files with no available tips show a brush glyph. Files above 512 MB, or files
 with no tip loaded within 5 seconds, also show a brush glyph because the
 thumbnail cannot tell whether they are damaged. Files that fail to load for any other reason show a warning glyph.

@@ -129,6 +129,32 @@ final class ThumbnailTests: XCTestCase {
         }
     }
 
+    func testPillIs13PointsTallAt64PointsSoItsTextStaysReadable() throws {
+        let context = try draw(BrushThumbnail(format: .abr, tips: [], size: CGSize(width: 64, height: 64)), pixels: 128)
+        let pixelsPerPoint = 2.0
+        let pillBottom = 128 * 0.10
+        let pillTop = pillBottom + 13 * pixelsPerPoint
+        for (actual, expected) in zip(try pixel(context, x: 64, y: Int(pillTop) - 2), [47, 111, 237, 255]) {
+            XCTAssertEqual(Int(actual), expected, accuracy: 1)
+        }
+        XCTAssertEqual(try pixel(context, x: 64, y: Int(pillTop) + 3), [255, 255, 255, 255])
+    }
+
+    func testLongestBadgeKeeps4PointsFromTheCardSidesAt64Points() throws {
+        let context = try draw(BrushThumbnail(format: .brushset, tips: [], size: CGSize(width: 64, height: 64)), pixels: 128)
+        let pixelsPerPoint = 2.0
+        let cardLeft = 128 * 0.06
+        let cardRight = 128 - cardLeft
+        let margin = 4 * pixelsPerPoint
+        let pillMiddle = Int(128 * 0.10 + 13 * pixelsPerPoint / 2)
+        for x in [Int(cardLeft) + 3, Int(cardLeft + margin) - 1, Int(cardRight - margin) + 1, Int(cardRight) - 3] {
+            XCTAssertEqual(try pixel(context, x: x, y: pillMiddle), [255, 255, 255, 255], "x \(x) is beside the pill")
+        }
+        for (actual, expected) in zip(try pixel(context, x: 64, y: Int(128 * 0.10) + 3), [199, 77, 20, 255]) {
+            XCTAssertEqual(Int(actual), expected, accuracy: 1)
+        }
+    }
+
     func testWhiteBadgeTextReaches4Point5To1ContrastOnEveryFormatColour() throws {
         func luminance(_ color: CGColor) throws -> Double {
             let linear = try XCTUnwrap(color.components).prefix(3).map { component -> Double in
@@ -162,7 +188,7 @@ final class ThumbnailTests: XCTestCase {
     }
 
     func testFullInkTipDrawsNearBlackAtCardCentre() throws {
-        let context = try draw(BrushThumbnail(format: .brush, tips: [tip(255)], size: size), pixels: 128)
+        let context = try draw(BrushThumbnail(format: .brush, tips: [tip(255, side: 64)], size: size), pixels: 128)
         let centre = try pixel(context, x: 64, y: 64)
         for channel in centre.prefix(3) {
             // Generic gray 0.1 converts to approximately 34 in the sRGB bitmap.
@@ -171,8 +197,20 @@ final class ThumbnailTests: XCTestCase {
         XCTAssertEqual(centre[3], 255)
     }
 
+    func testSmallTipIsNotEnlargedPastTwoPointsPerSourcePixel() throws {
+        let sourceSide = 4
+        let context = try draw(BrushThumbnail(format: .brush, tips: [tip(255, side: sourceSide)], size: size), pixels: 128)
+        let tipAreaCentre = (x: 64, y: 75)
+        let beyondDrawnTip = sourceSide * 2 / 2 + 8
+        XCTAssertEqual(Int(try pixel(context, x: tipAreaCentre.x, y: tipAreaCentre.y)[0]), 34, accuracy: 2)
+        for (dx, dy) in [(0, -beyondDrawnTip), (-beyondDrawnTip, 0), (beyondDrawnTip, 0), (0, beyondDrawnTip)] {
+            let (x, y) = (tipAreaCentre.x + dx, tipAreaCentre.y + dy)
+            XCTAssertEqual(try pixel(context, x: x, y: y), [255, 255, 255, 255], "(\(x), \(y)) is outside the tip")
+        }
+    }
+
     func testGridDrawsInRowsFromTheTop() throws {
-        let thumbnail = BrushThumbnail(format: .abr, tips: [tip(255), tip(170), tip(85), tip(0)], size: size)
+        let thumbnail = BrushThumbnail(format: .abr, tips: [255, 170, 85, 0].map { tip($0, side: 32) }, size: size)
         let context = try draw(thumbnail, pixels: 128)
         let centres = [(x: 39, y: 97), (x: 89, y: 97), (x: 39, y: 54), (x: 89, y: 54)]
         let shades = try centres.map { try pixel(context, x: $0.x, y: $0.y)[0] }
@@ -182,8 +220,8 @@ final class ThumbnailTests: XCTestCase {
         XCTAssertEqual(shades[3], 255)
     }
 
-    private func tip(_ coverage: UInt8) -> BrushTip {
-        .available(width: 1, height: 1, pixels: Data([coverage]))
+    private func tip(_ coverage: UInt8, side: Int = 1) -> BrushTip {
+        .available(width: side, height: side, pixels: Data(repeating: coverage, count: side * side))
     }
 
     private func pixels(_ image: CGImage) throws -> Data {
@@ -207,7 +245,7 @@ final class ThumbnailTests: XCTestCase {
             data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
             space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ))
-        thumbnail.draw(in: context, size: CGSize(width: side, height: side))
+        thumbnail.draw(in: context, pixelSize: CGSize(width: side, height: side))
         return context
     }
 
