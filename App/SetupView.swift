@@ -9,9 +9,9 @@ struct SetupView: View {
     )!
 
     private static let extensionSettingsPath = if #available(macOS 15, *) {
-        "General > Login Items & Extensions > Quick Look"
+        "System Settings › General › Login Items & Extensions › Quick Look"
     } else {
-        "Privacy & Security > Extensions > Quick Look"
+        "System Settings › Privacy & Security › Extensions › Quick Look"
     }
 
     @Environment(\.openURL) private var openURL
@@ -19,34 +19,37 @@ struct SetupView: View {
     @State private var isDropTargeted = false
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .frame(width: 88, height: 88)
                 .padding(.bottom, 8)
                 .accessibilityHidden(true)
             Text("Brushes Quick Look")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.title2.weight(.semibold))
             Text("Finder thumbnails and space-bar previews for Photoshop .abr and Procreate .brush and .brushset files.")
-                .font(.system(size: 13))
+                .font(.body)
                 .foregroundStyle(.secondary)
                 .lineSpacing(2)
-            Text("To finish setup, turn on BrushesPreview and BrushesThumbnail in System Settings > \(Self.extensionSettingsPath).")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .lineSpacing(2)
-                .padding(.top, 10)
+            VStack(spacing: 4) {
+                Text("To finish setup, turn on BrushesPreview and BrushesThumbnail.")
+                    .font(.body)
+                Text(Self.extensionSettingsPath)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 12)
             HStack(spacing: 12) {
                 Button("Open System Settings") { openURL(Self.extensionSettings) }
                     .keyboardShortcut(.defaultAction)
                 Button("Open Brush File…") { NSDocumentController.shared.openDocument(nil) }
             }
             .controlSize(.large)
-            .padding(.top, 18)
+            .padding(.top, 12)
             Text("You can also drop brush files on this window to see every brush in them.")
-                .font(.system(size: 12))
+                .font(.callout)
                 .foregroundStyle(.secondary)
-                .padding(.top, 18)
+                .padding(.top, 12)
         }
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
