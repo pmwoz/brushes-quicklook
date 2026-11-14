@@ -49,9 +49,9 @@ fn reason_text(reason: UnavailableReason) -> String {
         UnavailableReason::NoShapePng => "This brush has no shape image.".to_owned(),
         UnavailableReason::UnsupportedTipKind(kind) => match tip_kind_label(&kind) {
             Some(label) => {
-                format!("Photoshop computes this tip ({label}). The file has no image.")
+                format!("{label} is a computed tip. It has no stored image.")
             }
-            None => "Photoshop computes this tip. The file has no image.".to_owned(),
+            None => "This is a computed tip. It has no stored image.".to_owned(),
         },
         UnavailableReason::Corrupt(message) => message,
         UnavailableReason::MissingTip { .. } => {
@@ -504,31 +504,31 @@ mod tests {
             ),
             (
                 computed("RoundPoint"),
-                "Photoshop computes this tip (Round Point). The file has no image.",
+                "Round Point is a computed tip. It has no stored image.",
             ),
             (
                 computed("AirbrushTip"),
-                "Photoshop computes this tip (Airbrush). The file has no image.",
+                "Airbrush is a computed tip. It has no stored image.",
             ),
             (
                 computed("ErodibleFlat"),
-                "Photoshop computes this tip (Erodible Flat). The file has no image.",
+                "Erodible Flat is a computed tip. It has no stored image.",
             ),
             (
                 computed("bristle"),
-                "Photoshop computes this tip (Bristle). The file has no image.",
+                "Bristle is a computed tip. It has no stored image.",
             ),
             (
                 computed("computed"),
-                "Photoshop computes this tip. The file has no image.",
+                "This is a computed tip. It has no stored image.",
             ),
             (
                 computed("shape tip"),
-                "Photoshop computes this tip. The file has no image.",
+                "This is a computed tip. It has no stored image.",
             ),
             (
                 computed(""),
-                "Photoshop computes this tip. The file has no image.",
+                "This is a computed tip. It has no stored image.",
             ),
             (
                 UnavailableReason::MissingTip {
