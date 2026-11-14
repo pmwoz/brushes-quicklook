@@ -28,8 +28,8 @@ Preconditions:
 
 - **Cells with reasons.** Run `bql preview $F/bad_shapes.brushset $F/zero_area_tip.abr`.
   `bad_shapes` reads `2 brushes · all without preview` and its cells say
-  "This brush has no shape image." and "failed to decode Shape.png…".
-  `zero_area_tip` reads `2 brushes · 1 without preview`, with one "tip has zero area" cell.
+  "This brush has no shape image." and "This brush’s shape image is damaged.".
+  `zero_area_tip` reads `2 brushes · 1 without preview`, with one "This brush’s shape image is damaged." cell.
 - **Single-brush cell.** Run `bql preview $F/missing_shape.brush $F/oversized_png.brush $F/deep_archive.brush $F/corrupt_shape.brush`.
   Each PNG shows the large dashed well with the reason, for example "The shape
   image is 60000 × 60000 px, too large to preview."
