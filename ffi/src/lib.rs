@@ -48,12 +48,14 @@ fn reason_text(reason: UnavailableReason) -> String {
     match reason {
         UnavailableReason::NoShapePng => "This brush has no shape image.".to_owned(),
         UnavailableReason::UnsupportedTipKind(kind) => match tip_kind_label(&kind) {
-            Some(label) => format!("Computed Photoshop tip ({label}). Not drawn yet."),
-            None => "Computed Photoshop tip. Not drawn yet.".to_owned(),
+            Some(label) => {
+                format!("Photoshop computes this tip ({label}). The file has no image.")
+            }
+            None => "Photoshop computes this tip. The file has no image.".to_owned(),
         },
         UnavailableReason::Corrupt(message) => message,
         UnavailableReason::MissingTip { .. } => {
-            "This brush's shape image is missing from the file.".to_owned()
+            "This brush’s shape image is missing from the file.".to_owned()
         }
         UnavailableReason::TooLarge { width, height } => {
             format!("The shape image is {width} × {height} px, too large to preview.")
@@ -502,34 +504,37 @@ mod tests {
             ),
             (
                 computed("RoundPoint"),
-                "Computed Photoshop tip (Round Point). Not drawn yet.",
+                "Photoshop computes this tip (Round Point). The file has no image.",
             ),
             (
                 computed("AirbrushTip"),
-                "Computed Photoshop tip (Airbrush). Not drawn yet.",
+                "Photoshop computes this tip (Airbrush). The file has no image.",
             ),
             (
                 computed("ErodibleFlat"),
-                "Computed Photoshop tip (Erodible Flat). Not drawn yet.",
+                "Photoshop computes this tip (Erodible Flat). The file has no image.",
             ),
             (
                 computed("bristle"),
-                "Computed Photoshop tip (Bristle). Not drawn yet.",
+                "Photoshop computes this tip (Bristle). The file has no image.",
             ),
             (
                 computed("computed"),
-                "Computed Photoshop tip. Not drawn yet.",
+                "Photoshop computes this tip. The file has no image.",
             ),
             (
                 computed("shape tip"),
-                "Computed Photoshop tip. Not drawn yet.",
+                "Photoshop computes this tip. The file has no image.",
             ),
-            (computed(""), "Computed Photoshop tip. Not drawn yet."),
+            (
+                computed(""),
+                "Photoshop computes this tip. The file has no image.",
+            ),
             (
                 UnavailableReason::MissingTip {
                     uuid: "0f1e2d3c".to_owned(),
                 },
-                "This brush's shape image is missing from the file.",
+                "This brush’s shape image is missing from the file.",
             ),
             (
                 UnavailableReason::TooLarge {
